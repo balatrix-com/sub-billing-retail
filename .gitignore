@@ -1,0 +1,45 @@
+node_modules/
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+*.swp
+*.swo
+~*
+.vscode/
+dist/
+build/
+*.pid
+*.seed
+.npm
+.eslintcache
+Help_doc/
+
+# User requested exclusions
+How_it_works.md
+websocket explained.md
+whole_system.md
+understand.md
+changes_made.md
+free_minute.md
+pbx.md
+stripe_testing_guide.md
+test_pbx_api.md
+testing_process.md
+
+# Useless script files
+check*.js
+test_*.js
+fix_*.js
+update_*.js
+insert_*.js
+verify_*.js
+terminate_db.js
+sync.sh
+recreate-schema.js
+run_prod_seed.js
+seed_demo_accounts.js
+trigger_renewal.js
+grant-permissions.js
+scratch/

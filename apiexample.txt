@@ -1,0 +1,282 @@
+# SUBSCRIPTION BILLING API EXAMPLES
+# Base URL is typically http://10.30.0.61:5005 (Check your environment config, or run `npm run dev`)
+
+# ==========================================
+# 1. Create a New Subscription
+# ==========================================
+# This endpoint creates a new subscription for a customer and charges their wallet.
+curl -X POST http://10.30.0.61:5005/api/subscriptions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "customer_id": "C-12345",
+    "plan_id": "PLAN-PRO-01",
+    "status": "active",
+    "addons": [
+      {
+        "addon_id": "ADDON-DID-LOCAL",
+        "quantity": 2
+      }
+    ]
+  }'
+
+# ==========================================
+# 2. Get All Subscriptions
+# ==========================================
+# Retrieves a list of all active and past subscriptions in the system.
+curl -X GET http://10.30.0.61:5005/api/subscriptions
+
+# ==========================================
+# 3. Get Subscriptions by Customer ID
+# ==========================================
+# Retrieves all subscriptions for a specific customer.
+curl -X GET http://10.30.0.61:5005/api/subscriptions/customer/C-12345
+
+# ==========================================
+# 4. Get a Single Subscription
+# ==========================================
+# Fetches details of a specific subscription. Replace the ID with the UUID or SUB-XXXX ID.
+curl -X GET http://10.30.0.61:5005/api/subscriptions/SUB-2601
+
+# ==========================================
+# 5. Cancel a Subscription (Professional Teardown & Refund)
+# ==========================================
+# This triggers the robust cancellation logic:
+# - Changes status to "cancelled"
+# - Calculates and issues a prorated refund to the customer's wallet
+# - Broadcasts a "subscription.cancelled" event
+# - The AssetService automatically catches the event and tears down all phone numbers, extensions, etc.
+curl -X DELETE http://10.30.0.61:5005/api/subscriptions/SUB-2601
+
+# ==========================================
+# 6. Update a Subscription (Manual Override)
+# ==========================================
+# Manually update fields like next_billing or status without triggering the full cancellation tear-down.
+curl -X PUT http://10.30.0.61:5005/api/subscriptions/SUB-2601 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "status": "active",
+    "next_billing": "2026-12-01T00:00:00.000Z"
+  }'
+
+# ========================================================
+# APPENDIX: Validated Real Data Tests (For Quick Copying)
+# ========================================================
+
+# A. Create Subscription (using real DB Customer & Plan)
+curl -X POST http://10.30.0.61:5005/api/subscriptions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "customer_id": "U0001",
+    "plan_id": "u_bas_99",
+    "status": "active",
+    "addons": []
+  }'
+
+# B. Cancel Subscription (Using the ID returned from Test A)
+# Expect a prorated refund (e.g., ~$98.99 returned to wallet) 
+# and instant asset teardown logs in your NodeJS terminal.
+curl -X DELETE http://10.30.0.61:5005/api/subscriptions/SUB-2602
+
+# C. Trigger Daily Renewals Manually (Testing Cron Job Logic)
+# This forces the server to scan for any subscriptions due for renewal today,
+# charge their wallets, update their next_billing dates, and issue fresh free minutes.
+curl -X POST http://10.30.0.61:5005/api/subscriptions/trigger-renewals
+
+# ========================================================
+# 7. Manually Renew a Specific Subscription
+# ========================================================
+# Use this to instantly reactivate a suspended or overdue subscription. 
+# This endpoint:
+# - Charges the customer's wallet for the plan + recurring addons.
+# - Updates the next_billing date to the next cycle.
+# - Automatically switches all assets (DIDs/Extensions) from 'inactive' back to 'active'.
+# Replace the ID with your UUID or SUB-XXXX ID.
+curl -X POST http://10.30.0.61:5005/api/subscriptions/SUB-2601/renew
+
+# ==========================================
+# 8. PBX Dashboard Integration APIs
+# ==========================================
+
+# A. Get PBX Customer Balance
+# Returns a formatted balance and free minutes for the PBX UI.
+curl -X GET http://10.30.0.61:5005/api/pbx/balance/U0001
+
+# Expected Response:
+# {
+#   "customer_id": "U0001",
+#   "f_balance": "USD 99.90",
+#   "mins Balance": 300
+# }
+
+# B. Get PBX Customer CDRs
+# Returns a flat array of call detail records with status and destination fields.
+curl -X GET http://10.30.0.61:5005/api/pbx/cdrs/U0005
+
+# Expected Response:
+# [
+#   {
+#     "caller": "U0006",
+#     "callee": "919789756484",
+#     "call_type": "OUTBOUND",
+#     "duration_sec": 60,
+#     "billsec": 60,
+#     "dest_type": "ext",
+#     "dest_value": "000601",
+#     "status": "answered",
+#     "created_at": "2026-04-20T14:02:46.848Z"
+#   }
+# ]
+
+# ==========================================
+# 9. Get All CDRs (No Customer ID, Ascending Order)
+# ==========================================
+# Returns a flat array of call detail records with status and destination fields, sorted ascending.
+# Supports filtering via query parameters: search, startDate, endDate
+curl -X GET "http://10.30.0.61:5005/api/pbx/cdrs?search=919&startDate=2026-05-12T00:00:00Z&endDate=2026-06-11T23:59:59Z"
+
+# Expected Response:
+# [
+#   {
+#     "caller": "U0006",
+#     "callee": "919789756484",
+#     "call_type": "OUTBOUND",
+#     "duration_sec": 60,
+#     "billsec": 60,
+#     "dest_type": "ext",
+#     "dest_value": "000601",
+#     "status": "answered",
+#     "created_at": "2026-04-20T14:02:46.848Z"
+#   }
+# ]
+
+# ==========================================
+# 10. Create a New Plan
+# ==========================================
+curl -X POST http://10.30.0.61:5005/api/plans \
+  -H "Content-Type: application/json" \
+  -d '{
+    "plan_id": "NEW-PLAN-01",
+    "name": "New Awesome Plan",
+    "amount": 49.99,
+    "currency": "USD",
+    "validity_months": 1,
+    "system_plan_id": "SYS-99",
+    "setup_fees": 10.00
+  }'
+
+# ==========================================
+# 10. Update an Existing Plan
+# ==========================================
+curl -X PUT http://10.30.0.61:5005/api/plans/NEW-PLAN-01 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Updated Awesome Plan",
+    "system_plan_id": "SYS-99-UPDATED",
+    "setup_fees": 15.00
+  }'
+
+# ==========================================
+# 11. Create a New Rate Card
+# ==========================================
+curl -X POST http://10.30.0.61:5005/api/rate-cards \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Global Premium Rates",
+    "currency": "USD",
+    "country": "US",
+    "in_rate_per_min": 0.015,
+    "in_initial_increment_sec": 60,
+    "in_increment_sec": 60,
+    "ob_rate_per_min": 0.025,
+    "ob_initial_increment_sec": 60,
+    "ob_increment_sec": 60
+  }'
+
+# ==========================================
+# 12. Get All Rate Cards
+# ==========================================
+curl -X GET http://10.30.0.61:5005/api/rate-cards
+
+# ==========================================
+# 13. Update an Existing Rate Card
+# ==========================================
+# Replace "1" with your actual ratecard_id
+curl -X PUT http://10.30.0.61:5005/api/rate-cards/1 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "ob_rate_per_min": 0.03
+    "country": canada
+  }'
+
+# ==========================================
+# 14. Create a New Recording Rate Card
+# ==========================================
+curl -X POST http://10.30.0.61:5005/api/rec-rate-cards \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": 1,
+    "name": "7_days_0.001",
+    "currency": "USD",
+    "rate_per_min": 0.001,
+    "retention_period": 7
+  }'
+
+# ==========================================
+# 15. Update an Existing Recording Rate Card
+# ==========================================
+curl -X PUT http://10.30.0.61:5005/api/rec-rate-cards/1 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rate_per_min": 0.002
+  }'
+
+# ==========================================
+# 16. Fetch Customer's Recording Rate Card
+# ==========================================
+curl -X GET http://10.30.0.61:5005/api/rec-rate-cards/customer/1007
+
+# ==========================================
+# 17. Update Customer's Recording Rate Card
+# ==========================================
+curl -X PUT http://10.30.0.61:5005/api/rec-rate-cards/customer/1007 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rec_rc_id": 1
+  }'
+
+# ==========================================
+# 18. Assign or Update Standard Rate Card for Customer
+# ==========================================
+curl -X POST http://10.30.0.61:5005/api/rate-cards/mappings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "customer_id": 1007,
+    "ratecard_id": 12
+  }'
+
+# ==========================================
+# 19. Fetch All Customer Standard Rate Card Mappings
+# ==========================================
+curl -X GET http://10.30.0.61:5005/api/rate-cards/mappings
+
+# ==========================================
+# 20. Edit Customer Wallet Credit Limit (Superadmin)
+# ==========================================
+# Update a customer's credit limit. Replace 'C-12345' with the target customer ID.
+curl -X PUT http://10.30.0.61:5005/api/customers/C-12345/credit-limit \
+  -H "Content-Type: application/json" \
+  -d '{
+    "credit_limit": 100.00
+  }'
+
+# ==========================================
+# 21. Get All Payment Details
+# ==========================================
+# Retrieves payment_id, customer_id, amount, and description for all payments.
+curl -X GET http://10.30.0.61:5005/api/payments/details
+
+# ==========================================
+# 22. Get Payment Details by Customer ID
+# ==========================================
+# Retrieves payment_id, customer_id, amount, and description for payments of a specific customer.
+curl -X GET http://10.30.0.61:5005/api/payments/details/customer/C-12345

@@ -1,0 +1,209 @@
+From 7275890a418034ba7f09a3f2aaff0e133674cf61 Mon Sep 17 00:00:00 2001
+From: avinashshanbhag77 <avinashshanbhag77@gmail.com>
+Date: Thu, 11 Jun 2026 20:55:10 +0530
+Subject: [PATCH] feat: add api endpoint to fetch all cdrs in ascending order
+ without customer id
+
+---
+ apiexample.txt                            | 25 +++++++-
+ src/controllers/PBXDashboardController.js | 19 ++++++
+ src/routes/pbxDashboardRoutes.js          |  3 +
+ src/services/CdrService.js                | 77 +++++++++++++++++++++++
+ src/services/PBXDashboardService.js       |  8 +++
+ 5 files changed, 131 insertions(+), 1 deletion(-)
+
+diff --git a/apiexample.txt b/apiexample.txt
+index 47c9a67..427ec10 100644
+--- a/apiexample.txt
++++ b/apiexample.txt
+@@ -128,7 +128,29 @@ curl -X GET http://10.30.0.3:5005/api/pbx/cdrs/U0005
+ # ]
+ 
+ # ==========================================
+-# 9. Create a New Plan
++# 9. Get All CDRs (No Customer ID, Ascending Order)
++# ==========================================
++# Returns a flat array of call detail records with status and destination fields, sorted ascending.
++# Supports filtering via query parameters: search, startDate, endDate
++curl -X GET "http://10.30.0.3:5005/api/pbx/cdrs?search=919&startDate=2026-05-12T00:00:00Z&endDate=2026-06-11T23:59:59Z"
++
++# Expected Response:
++# [
++#   {
++#     "caller": "U0006",
++#     "callee": "919789756484",
++#     "call_type": "OUTBOUND",
++#     "duration_sec": 60,
++#     "billsec": 60,
++#     "dest_type": "ext",
++#     "dest_value": "000601",
++#     "status": "answered",
++#     "created_at": "2026-04-20T14:02:46.848Z"
++#   }
++# ]
++
++# ==========================================
++# 10. Create a New Plan
+ # ==========================================
+ curl -X POST http://localhost:5005/api/plans \
+   -H "Content-Type: application/json" \
+@@ -183,4 +205,5 @@ curl -X PUT http://localhost:5005/api/rate-cards/1 \
+   -H "Content-Type: application/json" \
+   -d '{
+     "ob_rate_per_min": 0.03
++    "country": canada
+   }'
+diff --git a/src/controllers/PBXDashboardController.js b/src/controllers/PBXDashboardController.js
+index 8ba7240..d042161 100644
+--- a/src/controllers/PBXDashboardController.js
++++ b/src/controllers/PBXDashboardController.js
+@@ -80,6 +80,25 @@ class PBXDashboardController {
+     }
+   }
+ 
++  static async getAllCDRs(req, res) {
++    try {
++      const { search, startDate, endDate, limit, offset } = req.query;
++      
++      const result = await PBXDashboardService.getAllCDRs({ 
++        search,
++        startDate, 
++        endDate, 
++        limit: limit === 'all' ? 'all' : (limit ? parseInt(limit) : 50),
++        offset: offset ? parseInt(offset) : 0
++      });
++      
++      res.status(200).json(result);
++    } catch (err) {
++      console.error(`[PBXDashboardController] Error fetching all CDRs:`, err);
++      res.status(500).json({ error: 'Internal Server Error', details: err.message });
++    }
++  }
++
+   static async syncAssets(req, res) {
+     try {
+       const { subscriptionId } = req.params;
+diff --git a/src/routes/pbxDashboardRoutes.js b/src/routes/pbxDashboardRoutes.js
+index 0688d98..2d1c1aa 100644
+--- a/src/routes/pbxDashboardRoutes.js
++++ b/src/routes/pbxDashboardRoutes.js
+@@ -18,6 +18,9 @@ router.get('/subscription/:customerId', PBXDashboardController.getSubscriptionDe
+ // GET /api/pbx/cards/:customerId
+ router.get('/cards/:customerId', PBXDashboardController.getPaymentMethods);
+ 
++// GET /api/pbx/cdrs (Fetch all CDRs in ascending order)
++router.get('/cdrs', PBXDashboardController.getAllCDRs);
++
+ // GET /api/pbx/cdrs/:customerId
+ router.get('/cdrs/:customerId', PBXDashboardController.getCustomerCDRs);
+ 
+diff --git a/src/services/CdrService.js b/src/services/CdrService.js
+index 6c33c1b..34e54b0 100644
+--- a/src/services/CdrService.js
++++ b/src/services/CdrService.js
+@@ -120,6 +120,83 @@ class CdrService {
+       throw new Error(`Failed to fetch CDRs: ${err.message}`);
+     }
+   }
++
++  /**
++   * Get all CDRs with optional filtering and pagination in ascending order
++   * @param {Object} filters { search, startDate, endDate, limit, offset }
++   * @returns {Promise<Object>} { data: Array, total: number }
++   */
++  static async getAllCdrs(filters = {}) {
++    const { search, startDate, endDate, limit = 50, offset = 0 } = filters;
++    let baseQuery = `
++      FROM cdr
++      WHERE 1=1
++    `;
++    
++    const params = [];
++    let paramCount = 0;
++
++    if (search) {
++      paramCount++;
++      baseQuery += ` AND (caller LIKE $${paramCount} OR callee LIKE $${paramCount})`;
++      params.push(`%${search}%`);
++    }
++
++    if (startDate) {
++      paramCount++;
++      baseQuery += ` AND start_time >= $${paramCount}`;
++      params.push(startDate);
++    }
++
++    if (endDate) {
++      paramCount++;
++      baseQuery += ` AND start_time <= $${paramCount}`;
++      params.push(endDate);
++    }
++
++    const countQuery = `SELECT COUNT(*) as count ${baseQuery}`;
++    
++    let dataQuery = `
++      SELECT 
++        call_uuid,
++        caller, 
++        callee, 
++        direction as call_type,
++        duration_sec,
++        dest_value,
++        billed_amount as bill_amount,
++        dest_type,
++        billsec,
++        call_status as status,
++        start_time as created_at
++      ${baseQuery}
++      ORDER BY created_at ASC
++    `;
++
++    if (limit && limit !== 'all') {
++      paramCount++;
++      dataQuery += ` LIMIT $${paramCount}`;
++      params.push(limit);
++
++      paramCount++;
++      dataQuery += ` OFFSET $${paramCount}`;
++      params.push(offset);
++    }
++    
++    try {
++      const [countResult, dataResult] = await Promise.all([
++        readonlyPool.query(countQuery, params.slice(0, (countQuery.match(/\$/g) || []).length)),
++        readonlyPool.query(dataQuery, params)
++      ]);
++
++      return {
++        data: dataResult.rows,
++        total: parseInt(countResult.rows[0].count)
++      };
++    } catch (err) {
++      throw new Error(`Failed to fetch all CDRs: ${err.message}`);
++    }
++  }
+ }
+ 
+ module.exports = CdrService;
+diff --git a/src/services/PBXDashboardService.js b/src/services/PBXDashboardService.js
+index f1ab037..3b80b7e 100644
+--- a/src/services/PBXDashboardService.js
++++ b/src/services/PBXDashboardService.js
+@@ -115,6 +115,14 @@ class PBXDashboardService {
+   static async getCustomerCDRs(customerId, filters = {}) {
+     return await CdrService.getCdrsByCustomerId(customerId, filters);
+   }
++
++  /**
++   * Get all CDRs formatted for PBX Dashboard
++   * @param {Object} filters
++   */
++  static async getAllCDRs(filters = {}) {
++    return await CdrService.getAllCdrs(filters);
++  }
+ }
+ 
+ module.exports = PBXDashboardService;
+-- 
+2.38.1.windows.1
+
