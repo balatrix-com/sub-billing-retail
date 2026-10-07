@@ -1,4 +1,5 @@
 const pool = require('../config/database');
+const RecordingGateService = require('./RecordingGateService');
 const { v4: uuidv4 } = require('uuid');
 const FreeMinsService = require('./FreeMinsService');
 const WalletLockService = require('./WalletLockService');
@@ -44,74 +45,6 @@ class SubscriptionService {
 
       const subscription = subResult.rows[0];
 
-      await WalletLockService.acquireCustomerWalletLock(client, subscription.customer_id);
-
-      // Grant free minutes for the subscription
-      if (plan.free_mins > 0) {
-        const freeMinsInSecs = plan.free_mins * 60;
-        const grantQuery = `
-          INSERT INTO free_mins_grants (
-            id, customer_id, source_type, source_id, granted_secs, 
-            valid_from, valid_to, status
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-          RETURNING *;
-        `;
-
-        await client.query(grantQuery, [
-          uuidv4(),
-          customerId,
-          'plan',
-          planId,
-          freeMinsInSecs,
-          now,
-          nextBilling,
-          'active'
-        ]);
-
-        // Update wallet with free seconds
-        const walletLockQuery = `
-          SELECT free_seconds, version
-          FROM customer_wallets
-          WHERE customer_id = $1
-          FOR UPDATE;
-        `;
-        const walletRows = await client.query(walletLockQuery, [customerId]);
-
-        if (!walletRows.rows[0]) {
-          throw new Error('Wallet not found');
-        }
-
-        const currentFreeSeconds = Number(walletRows.rows[0].free_seconds || 0);
-        const nextFreeSeconds = currentFreeSeconds + freeMinsInSecs;
-        const walletVersion = walletRows.rows[0].version;
-
-        const walletQuery = `
-          UPDATE customer_wallets
-          SET free_seconds = $2, version = version + 1, last_updated = now()
-          WHERE customer_id = $1 AND version = $3;
-        `;
-
-        const walletUpdate = await client.query(walletQuery, [customerId, nextFreeSeconds, walletVersion]);
-        if (walletUpdate.rowCount === 0) {
-          throw new Error('Wallet version mismatch - concurrent modification detected');
-        }
-
-        // Record the transaction
-        const txnQuery = `
-          INSERT INTO free_mins_transactions (
-            id, customer_id, amount_secs, transaction_type, reference
-          ) VALUES ($1, $2, $3, $4, $5);
-        `;
-
-        await client.query(txnQuery, [
-          uuidv4(),
-          customerId,
-          freeMinsInSecs,
-          'grant',
-          `subscription_${subscription.id}_created`
-        ]);
-      }
-
       await client.query('COMMIT');
       return subscription;
     } catch (err) {
@@ -133,7 +66,7 @@ class SubscriptionService {
 
       // Get subscription
       const subQuery = `
-        SELECT s.*, p.validity_months, p.free_mins
+        SELECT s.*, p.validity_months
         FROM subscriptions s
         JOIN plans p ON s.plan_id = p.plan_id
         WHERE s.id = $1
@@ -148,7 +81,6 @@ class SubscriptionService {
 
       const subscription = subResult.rows[0];
 
-      await WalletLockService.acquireCustomerWalletLock(client, subscription.customer_id);
       const now = new Date();
       const nextBilling = new Date(now.getTime() + subscription.validity_months * 30.44 * 24 * 60 * 60 * 1000);
 
@@ -161,73 +93,6 @@ class SubscriptionService {
       `;
 
       const updateResult = await client.query(updateQuery, [subscriptionId, nextBilling]);
-
-      // Grant new free minutes
-      if (subscription.free_mins > 0) {
-        const freeMinsInSecs = subscription.free_mins * 60;
-
-        const grantQuery = `
-          INSERT INTO free_mins_grants (
-            id, customer_id, source_type, source_id, granted_secs,
-            valid_from, valid_to, status
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-          RETURNING *;
-        `;
-
-        await client.query(grantQuery, [
-          uuidv4(),
-          subscription.customer_id,
-          'plan',
-          subscription.plan_id,
-          freeMinsInSecs,
-          now,
-          nextBilling,
-          'active'
-        ]);
-
-        // Update wallet
-        const walletLockQuery = `
-          SELECT free_seconds, version
-          FROM customer_wallets
-          WHERE customer_id = $1
-          FOR UPDATE;
-        `;
-        const walletRows = await client.query(walletLockQuery, [subscription.customer_id]);
-
-        if (!walletRows.rows[0]) {
-          throw new Error('Wallet not found');
-        }
-
-        const currentFreeSeconds = Number(walletRows.rows[0].free_seconds || 0);
-        const nextFreeSeconds = currentFreeSeconds + freeMinsInSecs;
-        const walletVersion = walletRows.rows[0].version;
-
-        const walletQuery = `
-          UPDATE customer_wallets
-          SET free_seconds = $2, version = version + 1, last_updated = now()
-          WHERE customer_id = $1 AND version = $3;
-        `;
-
-        const walletUpdate = await client.query(walletQuery, [subscription.customer_id, nextFreeSeconds, walletVersion]);
-        if (walletUpdate.rowCount === 0) {
-          throw new Error('Wallet version mismatch - concurrent modification detected');
-        }
-
-        // Record transaction
-        const txnQuery = `
-          INSERT INTO free_mins_transactions (
-            id, customer_id, amount_secs, transaction_type, reference
-          ) VALUES ($1, $2, $3, $4, $5);
-        `;
-
-        await client.query(txnQuery, [
-          uuidv4(),
-          subscription.customer_id,
-          freeMinsInSecs,
-          'grant',
-          `subscription_${subscriptionId}_renewed`
-        ]);
-      }
 
       await client.query('COMMIT');
       return updateResult.rows[0];
@@ -311,9 +176,11 @@ class SubscriptionService {
 
       // 4. Refund to wallet if amount > 0
       let updatedWalletBalance = null;
+      let updatedWallet = null;
       if (refundAmount > 0) {
         const lockedWalletQuery = `
-          SELECT w.fiat_balance, w.version
+          SELECT w.fiat_balance, COALESCE(w.credit_limit, 0) AS credit_limit,
+                 COALESCE(w.credit_used, 0) AS credit_used, w.version
           FROM customer_wallets w
           WHERE w.customer_id = $1
           FOR UPDATE;
@@ -323,14 +190,19 @@ class SubscriptionService {
         if (walletResult.rows[0]) {
           const wallet = walletResult.rows[0];
           const beforeBalance = Number(wallet.fiat_balance);
-          const afterBalance = beforeBalance + refundAmount;
+          const beforeCreditUsed = Number(wallet.credit_used || 0);
+          const appliedToCredit = Math.min(refundAmount, beforeCreditUsed);
+          const afterCreditUsed = beforeCreditUsed - appliedToCredit;
+          const afterBalance = beforeBalance + (refundAmount - appliedToCredit);
 
           // Update Wallet
-          await client.query(`
+          const updatedWalletResult = await client.query(`
             UPDATE customer_wallets
-            SET fiat_balance = $1, last_updated = now(), version = version + 1
-            WHERE customer_id = $2
-          `, [afterBalance, subscription.customer_id]);
+            SET fiat_balance = $1, credit_used = $2, last_updated = now(), version = version + 1
+            WHERE customer_id = $3
+            RETURNING *
+          `, [afterBalance, afterCreditUsed, subscription.customer_id]);
+          updatedWallet = updatedWalletResult.rows[0];
 
           // Record Txn
           await client.query(`
@@ -350,7 +222,9 @@ class SubscriptionService {
             JSON.stringify({
               subscription_id: subscription.subscription_id,
               reason: 'Prorated cancellation refund',
-              total_refundable: refundAmount
+              total_refundable: refundAmount,
+              applied_to_credit: appliedToCredit,
+              credited_to_fiat: refundAmount - appliedToCredit
             })
           ]);
 
@@ -384,6 +258,10 @@ class SubscriptionService {
       `, [subscription.customer_id, subscription.plan_id, subscription.id]);
 
       await client.query('COMMIT');
+
+      if (updatedWallet) {
+        await RecordingGateService.sync(subscription.customer_id, updatedWallet);
+      }
 
       const cancelledSub = result.rows[0];
       cancelledSub.refunded_fiat = refundAmount;

@@ -2,6 +2,7 @@ const pool = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
 const StripeService = require('./StripeService');
 const WalletLockService = require('./WalletLockService');
+const RecordingGateService = require('./RecordingGateService');
 
 class PaymentService {
   /**
@@ -233,7 +234,7 @@ class PaymentService {
       ]);
 
       // Credit wallet
-      await this.creditWallet(client, payment.customer_id, payment.amount, payment.payment_id);
+      const updatedWallet = await this.creditWallet(client, payment.customer_id, payment.amount, payment.payment_id);
 
       // Record transaction
       await client.query(`
@@ -258,6 +259,8 @@ class PaymentService {
       `, ['processed', payment.id, webhookUUID]);
 
       await client.query('COMMIT');
+
+      await RecordingGateService.sync(payment.customer_id, updatedWallet);
 
       console.log(`[PaymentService] ✓ Payment ${payment.payment_id} completed and wallet credited`);
 
@@ -288,7 +291,7 @@ class PaymentService {
 
     // Lock wallet for update
     const walletQuery = `
-      SELECT fiat_balance, version
+      SELECT fiat_balance, COALESCE(credit_used, 0) AS credit_used, version
       FROM customer_wallets
       WHERE customer_id = $1
       FOR UPDATE;
@@ -301,22 +304,29 @@ class PaymentService {
     }
 
     const wallet = walletResult.rows[0];
-    const before_balance = wallet.fiat_balance;
-    const after_balance = parseFloat(before_balance) + parseFloat(amount);
+    const before_balance = Number(wallet.fiat_balance || 0);
+    const before_credit_used = Number(wallet.credit_used || 0);
+    const paymentAmount = Number(amount);
+    const applied_to_credit = Math.min(paymentAmount, before_credit_used);
+    const fiat_credit = paymentAmount - applied_to_credit;
+    const after_balance = before_balance + fiat_credit;
+    const after_credit_used = before_credit_used - applied_to_credit;
 
     // Update wallet balance
     const updateQuery = `
       UPDATE customer_wallets
       SET 
-        fiat_balance = fiat_balance + $1,
+        fiat_balance = $1,
+        credit_used = $2,
         version = version + 1,
         last_updated = NOW()
-      WHERE customer_id = $2 AND version = $3
+      WHERE customer_id = $3 AND version = $4
       RETURNING *;
     `;
 
     const updateResult = await client.query(updateQuery, [
-      amount,
+      after_balance,
+      after_credit_used,
       customer_id,
       wallet.version
     ]);
@@ -340,7 +350,12 @@ class PaymentService {
       after_balance,
       'payment',
       payment_id,
-      JSON.stringify({ payment_id, source: 'stripe' })
+      JSON.stringify({
+        payment_id,
+        source: 'stripe',
+        applied_to_credit,
+        credited_to_fiat: fiat_credit
+      })
     ]);
 
     // Record payment transaction
@@ -357,7 +372,8 @@ class PaymentService {
       'success'
     ]);
 
-    console.log(`[PaymentService] Wallet credited: ${customer_id} +$${amount} (${before_balance} → ${after_balance})`);
+    console.log(`[PaymentService] Wallet credited: ${customer_id} +$${amount} (${before_balance} → ${after_balance}, credit used ${before_credit_used} → ${after_credit_used})`);
+    return updateResult.rows[0];
   }
 
   /**
@@ -489,7 +505,7 @@ class PaymentService {
       ]);
 
       // Credit wallet (reusing existing robust logic)
-      await this.creditWallet(client, customer_id, amount, payment_id);
+      const updatedWallet = await this.creditWallet(client, customer_id, amount, payment_id);
 
       // Record transaction history
       await client.query(`
@@ -506,6 +522,8 @@ class PaymentService {
       ]);
 
       await client.query('COMMIT');
+
+      await RecordingGateService.sync(customer_id, updatedWallet);
 
       console.log(`[PaymentService] Manual payment recorded: ${payment_id} for ${customer_id}`);
 

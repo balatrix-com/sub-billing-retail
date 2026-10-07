@@ -9,11 +9,9 @@ class Plan {
       currency,
       validity_months,
       rate_card_id = null,
-      tfns = 0,
-      dids = 0,
-      free_mins = 0,
+      numbers = 0,
       extensions = 0,
-      monitoring_per_user = 0,
+      monitoring_extensions = 0,
       metadata = {},
       system_plan_id = null,
       setup_fees = 0
@@ -22,15 +20,15 @@ class Plan {
     const query = `
       INSERT INTO plans (
         plan_id, name, amount, currency, validity_months, rate_card_id,
-        tfns, dids, free_mins, extensions, monitoring_per_user, metadata,
+        numbers, extensions, monitoring_extensions, metadata,
         system_plan_id, setup_fees
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       RETURNING *;
     `;
 
     const values = [
       plan_id, name, amount, currency, validity_months, rate_card_id,
-      tfns, dids, free_mins, extensions, monitoring_per_user, 
+      numbers, extensions, monitoring_extensions,
       JSON.stringify(metadata), system_plan_id, setup_fees
     ];
 
@@ -65,7 +63,7 @@ class Plan {
   static async update(planId, updates) {
     const allowedFields = [
       'name', 'amount', 'validity_months', 'rate_card_id',
-      'tfns', 'dids', 'free_mins', 'extensions', 'monitoring_per_user',
+      'numbers', 'extensions', 'monitoring_extensions',
       'metadata', 'system_plan_id', 'setup_fees'
     ];
     const updateKeys = Object.keys(updates).filter(key => allowedFields.includes(key));

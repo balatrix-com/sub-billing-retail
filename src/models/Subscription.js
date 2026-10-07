@@ -2,6 +2,7 @@ const pool = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
 const EventService = require('../services/EventService');
 const WalletLockService = require('../services/WalletLockService');
+const RecordingGateService = require('../services/RecordingGateService');
 
 class Subscription {
   static generateTxnRef(prefix) {
@@ -116,7 +117,7 @@ class Subscription {
 
       const planAmount = Number(plan.amount || 0);
       let totalCost = planAmount;
-      let totalFreeSeconds = Number(plan.free_mins || 0) * 60;
+      const totalFreeSeconds = 0;
 
       const addonCostBreakdown = normalizedAddons.map((item) => {
         const addon = addonById.get(item.addon_id);
@@ -125,9 +126,7 @@ class Subscription {
         const lineTotal = recurringTotal + setupTotal;
         totalCost += lineTotal;
 
-        const addonFreeMins = this.parseAddonFreeMins(addon.metadata);
-        const addonFreeSeconds = addonFreeMins > 0 ? addonFreeMins * 60 * item.quantity : 0;
-        totalFreeSeconds += addonFreeSeconds;
+        const addonFreeSeconds = 0;
 
         return {
           addon,
@@ -141,7 +140,8 @@ class Subscription {
 
       // Pre-check without lock/transaction for fast fail
       const precheckQuery = `
-        SELECT w.customer_id, w.fiat_balance, COALESCE(w.credit_limit, 0) AS credit_limit, w.version, c.currency
+        SELECT w.customer_id, w.fiat_balance, COALESCE(w.credit_limit, 0) AS credit_limit,
+               COALESCE(w.credit_used, 0) AS credit_used, w.version, c.currency
         FROM customer_wallets w
         JOIN customers c ON c.customer_id = w.customer_id
         WHERE w.customer_id = $1;
@@ -157,7 +157,8 @@ class Subscription {
       const preWallet = precheckResult.rows[0];
       const preBalance = Number(preWallet.fiat_balance);
       const creditLimit = Number(preWallet.credit_limit || 0);
-      const availableBalance = preBalance + creditLimit; // fiat_balance + credit_limit line
+      const preCreditUsed = Number(preWallet.credit_used || 0);
+      const availableBalance = preBalance + Math.max(0, creditLimit - preCreditUsed);
 
       if (!override_balance_check && availableBalance < totalCost) {
         const error = new Error('Insufficient wallet balance and credit limit to purchase subscription');
@@ -172,7 +173,9 @@ class Subscription {
         await WalletLockService.acquireCustomerWalletLock(client, customer_id);
 
         const lockedWalletQuery = `
-          SELECT w.customer_id, w.currency, w.fiat_balance, w.free_seconds, COALESCE(w.credit_limit, 0) AS credit_limit, w.version
+          SELECT w.customer_id, w.currency, w.fiat_balance, w.free_seconds,
+                 COALESCE(w.credit_limit, 0) AS credit_limit,
+                 COALESCE(w.credit_used, 0) AS credit_used, w.version
           FROM customer_wallets w
           WHERE w.customer_id = $1
           FOR UPDATE;
@@ -189,7 +192,8 @@ class Subscription {
         const beforeBalance = Number(wallet.fiat_balance);
         const beforeFreeSeconds = Number(wallet.free_seconds);
         const lockedCreditLimit = Number(wallet.credit_limit || 0);
-        const availableBalance = beforeBalance + lockedCreditLimit; // fiat_balance + credit_limit line
+        const beforeCreditUsed = Number(wallet.credit_used || 0);
+        const availableBalance = beforeBalance + Math.max(0, lockedCreditLimit - beforeCreditUsed);
 
         if (!override_balance_check && availableBalance < totalCost) {
           const error = new Error('Insufficient wallet balance and credit limit to purchase subscription');
@@ -256,12 +260,17 @@ class Subscription {
           runningBalance = nextRunningBalance;
         }
 
-        // Single wallet update for fiat + free seconds
+        const fiatDebit = Math.min(beforeBalance, totalCost);
+        const creditDebit = totalCost - fiatDebit;
+        const afterFiatBalance = beforeBalance - fiatDebit;
+        const afterCreditUsed = beforeCreditUsed + creditDebit;
+
+        // Single multi-tier wallet update. Retail plans no longer grant free seconds.
         const updateWalletQuery = `
           UPDATE customer_wallets
           SET
-            fiat_balance = fiat_balance - $1,
-            free_seconds = free_seconds + $2,
+            fiat_balance = $1,
+            credit_used = $2,
             last_updated = now(),
             version = version + 1
           WHERE customer_id = $3 AND version = $4
@@ -269,8 +278,8 @@ class Subscription {
         `;
 
         const updatedWalletResult = await client.query(updateWalletQuery, [
-          totalCost,
-          totalFreeSeconds,
+          afterFiatBalance,
+          afterCreditUsed,
           customer_id,
           wallet.version
         ]);
@@ -405,6 +414,8 @@ class Subscription {
 
         await client.query('COMMIT');
 
+        await RecordingGateService.sync(customer_id, updatedWalletResult.rows[0]);
+
         // Emit event for asset creation service
         const subscriptionAddonIds = createdAddons.map(addon => addon.id);
         EventService.emit('subscription.created', {
@@ -418,7 +429,8 @@ class Subscription {
           addons: createdAddons,
           wallet: {
             before_balance: beforeBalance,
-            after_balance: runningBalance,
+            after_balance: afterFiatBalance,
+            after_credit_used: afterCreditUsed,
             before_free_seconds: beforeFreeSeconds,
             after_free_seconds: Number(updatedWalletResult.rows[0].free_seconds),
             total_cost: totalCost,

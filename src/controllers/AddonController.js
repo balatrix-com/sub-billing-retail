@@ -3,6 +3,7 @@ const CustomerModel = require('../models/Customer');
 const pool = require('../config/database');
 const ProrationService = require('../services/ProrationService');
 const AssetService = require('../services/AssetService');
+const RecordingGateService = require('../services/RecordingGateService');
 
 class AddonController {
   // Create or Update Catalog Addon Item
@@ -201,6 +202,12 @@ class AddonController {
       );
 
       await client.query('COMMIT');
+
+      await RecordingGateService.sync(customer_id, {
+        fiat_balance: newFiat,
+        credit_limit: creditLimit,
+        credit_used: newCreditUsed
+      });
 
       // Asynchronously/safely provision addon assets with source_type = 'addon'
       try {

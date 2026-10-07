@@ -6,6 +6,7 @@ const FreeMinsService = require('./FreeMinsService');
 const AssetService = require('./AssetService');
 const cron = require('node-cron');
 const WalletLockService = require('./WalletLockService');
+const RecordingGateService = require('./RecordingGateService');
 
 class BillingService {
   static initialize() {
@@ -70,7 +71,8 @@ class BillingService {
 
       // Get customer's wallet
       const walletQuery = `
-        SELECT fiat_balance, COALESCE(credit_limit, 0) as credit_limit
+        SELECT fiat_balance, COALESCE(credit_limit, 0) as credit_limit,
+               COALESCE(credit_used, 0) as credit_used
         FROM customer_wallets
         WHERE customer_id = $1
         FOR UPDATE;
@@ -107,23 +109,26 @@ class BillingService {
       // Check if sufficient balance for Total (Plan + Addons)
       const fiatBalance = parseFloat(wallet.fiat_balance);
       const creditLimit = parseFloat(wallet.credit_limit);
-      const availableBalance = fiatBalance + creditLimit;
+      const creditUsed = parseFloat(wallet.credit_used);
+      const availableBalance = fiatBalance + Math.max(0, creditLimit - creditUsed);
 
       if (availableBalance < totalChargeAmount) {
         throw new Error(`Insufficient balance for total renewal charge of ${totalChargeAmount}`);
       }
 
       const beforeBalance = fiatBalance;
-      const afterBalance = beforeBalance - totalChargeAmount;
+      const fiatDebit = Math.min(beforeBalance, totalChargeAmount);
+      const afterBalance = beforeBalance - fiatDebit;
+      const afterCreditUsed = creditUsed + (totalChargeAmount - fiatDebit);
 
       // Update wallet
       const updateWalletQuery = `
         UPDATE customer_wallets
-        SET fiat_balance = $2, last_updated = now()
+        SET fiat_balance = $2, credit_used = $3, last_updated = now()
         WHERE customer_id = $1;
       `;
 
-      await client.query(updateWalletQuery, [subscription.customer_id, afterBalance]);
+      await client.query(updateWalletQuery, [subscription.customer_id, afterBalance, afterCreditUsed]);
 
       // Create invoice
       const invoiceId = uuidv4();
@@ -203,48 +208,13 @@ class BillingService {
           await client.query(renewAddonsQuery, [subscriptionUUID, nextBilling]);
       }
 
-      // Grant new free minutes
-      const subDetails = subResult.rows[0];
-      
-      // Reset existing minutes before granting new ones (Non-Rollover policy)
-      console.log(`[BillingService] Resetting free minutes for customer ${subscription.customer_id} before renewal grant...`);
-      await FreeMinsService.expireGrants(subscription.customer_id, client);
-
-      const planQuery = `SELECT free_mins FROM plans WHERE plan_id = $1;`;
-      const planResult = await client.query(planQuery, [subDetails.plan_id]);
-
-      if (planResult.rows[0] && planResult.rows[0].free_mins > 0) {
-        const freeMinsInSecs = planResult.rows[0].free_mins * 60;
-
-        const grantQuery = `
-          INSERT INTO free_mins_grants (
-            id, customer_id, source_type, source_id, granted_secs,
-            valid_from, valid_to, status
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
-        `;
-
-        await client.query(grantQuery, [
-          uuidv4(),
-          subscription.customer_id,
-          'plan',
-          subDetails.plan_id,
-          freeMinsInSecs,
-          now,
-          nextBilling,
-          'active'
-        ]);
-
-        // Update wallet free mins
-        const walletMinsQuery = `
-          UPDATE customer_wallets
-          SET free_seconds = free_seconds + $2, last_updated = now()
-          WHERE customer_id = $1;
-        `;
-
-        await client.query(walletMinsQuery, [subscription.customer_id, freeMinsInSecs]);
-      }
-
       await client.query('COMMIT');
+
+      await RecordingGateService.sync(subscription.customer_id, {
+        fiat_balance: afterBalance,
+        credit_limit: creditLimit,
+        credit_used: afterCreditUsed
+      });
 
       // Reactivate any suspended assets now that we are successfully renewed
       await AssetService.reactivateAssetsForSubscription(subscriptionUUID);

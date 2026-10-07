@@ -1,6 +1,7 @@
 const { pool, readonlyPool } = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
 const WalletLockService = require('./WalletLockService');
+const RecordingGateService = require('./RecordingGateService');
 
 class WalletService {
   /**
@@ -33,6 +34,7 @@ class WalletService {
 
     try {
       const result = await pool.query(query, [customerId, 'USD', 0, 0, 0]);
+      await RecordingGateService.sync(customerId, result.rows[0]);
       return result.rows[0];
     } catch (err) {
       throw new Error(`Failed to create wallet: ${err.message}`);
@@ -50,7 +52,10 @@ class WalletService {
       await WalletLockService.acquireCustomerWalletLock(client, customerId);
 
       // Get current balance
-      const balanceQuery = 'SELECT fiat_balance, version FROM customer_wallets WHERE customer_id = $1 FOR UPDATE;';
+      const balanceQuery = `
+        SELECT fiat_balance, credit_limit, credit_used, version
+        FROM customer_wallets WHERE customer_id = $1 FOR UPDATE;
+      `;
       const balanceResult = await client.query(balanceQuery, [customerId]);
 
       if (!balanceResult.rows[0]) {
@@ -58,16 +63,20 @@ class WalletService {
       }
 
       const beforeBalance = parseFloat(balanceResult.rows[0].fiat_balance);
-      const afterBalance = beforeBalance + amount;
+      const beforeCreditUsed = Number(balanceResult.rows[0].credit_used || 0);
+      const creditPayoff = Math.min(Number(amount), beforeCreditUsed);
+      const afterCreditUsed = beforeCreditUsed - creditPayoff;
+      const afterBalance = beforeBalance + (Number(amount) - creditPayoff);
       const version = balanceResult.rows[0].version;
 
       // Update wallet balance
       const updateQuery = `
         UPDATE customer_wallets
-        SET fiat_balance = $2, version = version + 1, last_updated = now()
-        WHERE customer_id = $1 AND version = $3;
+        SET fiat_balance = $2, credit_used = $3, version = version + 1, last_updated = now()
+        WHERE customer_id = $1 AND version = $4
+        RETURNING *;
       `;
-      const updateResult = await client.query(updateQuery, [customerId, afterBalance, version]);
+      const updateResult = await client.query(updateQuery, [customerId, afterBalance, afterCreditUsed, version]);
 
       if (updateResult.rowCount === 0) {
         throw new Error('Wallet version mismatch - concurrent modification detected');
@@ -92,10 +101,15 @@ class WalletService {
         'payment',
         transactionId,
         gateway,
-        JSON.stringify(metadata)
+        JSON.stringify({
+          ...metadata,
+          applied_to_credit: creditPayoff,
+          credited_to_fiat: Number(amount) - creditPayoff
+        })
       ]);
 
       await client.query('COMMIT');
+      await RecordingGateService.sync(customerId, updateResult.rows[0]);
       return txnResult.rows[0];
     } catch (err) {
       await client.query('ROLLBACK');
@@ -116,7 +130,10 @@ class WalletService {
       await WalletLockService.acquireCustomerWalletLock(client, customerId);
 
       // Get current balance
-      const balanceQuery = 'SELECT fiat_balance, version FROM customer_wallets WHERE customer_id = $1 FOR UPDATE;';
+      const balanceQuery = `
+        SELECT fiat_balance, credit_limit, credit_used, version
+        FROM customer_wallets WHERE customer_id = $1 FOR UPDATE;
+      `;
       const balanceResult = await client.query(balanceQuery, [customerId]);
 
       if (!balanceResult.rows[0]) {
@@ -135,7 +152,8 @@ class WalletService {
       const updateQuery = `
         UPDATE customer_wallets
         SET fiat_balance = $2, version = version + 1, last_updated = now()
-        WHERE customer_id = $1 AND version = $3;
+        WHERE customer_id = $1 AND version = $3
+        RETURNING *;
       `;
       const updateResult = await client.query(updateQuery, [customerId, afterBalance, version]);
 
@@ -165,6 +183,7 @@ class WalletService {
       ]);
 
       await client.query('COMMIT');
+      await RecordingGateService.sync(customerId, updateResult.rows[0]);
       return txnResult.rows[0];
     } catch (err) {
       await client.query('ROLLBACK');
@@ -365,7 +384,10 @@ class WalletService {
       await client.query('BEGIN');
       await WalletLockService.acquireCustomerWalletLock(client, customerId);
 
-      const balanceQuery = 'SELECT version FROM customer_wallets WHERE customer_id = $1 FOR UPDATE;';
+      const balanceQuery = `
+        SELECT fiat_balance, credit_used, version
+        FROM customer_wallets WHERE customer_id = $1 FOR UPDATE;
+      `;
       const balanceResult = await client.query(balanceQuery, [customerId]);
 
       if (!balanceResult.rows[0]) {
@@ -388,6 +410,7 @@ class WalletService {
       }
 
       await client.query('COMMIT');
+      await RecordingGateService.sync(customerId, updateResult.rows[0]);
       return updateResult.rows[0];
     } catch (err) {
       await client.query('ROLLBACK');

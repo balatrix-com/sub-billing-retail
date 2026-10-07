@@ -18,8 +18,7 @@ class CustomerController {
         state,
         country,
         credit_limit,
-        customer_id,
-        ratecard_id
+        customer_id
       } = req.body;
 
       const customer = await CustomerModel.create({
@@ -36,8 +35,7 @@ class CustomerController {
         state,
         country,
         credit_limit,
-        customer_id,
-        ratecard_id
+        customer_id
       });
 
       // For demo accounts, ensure subscription is initialized

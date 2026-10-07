@@ -1,4 +1,5 @@
 const pool = require('../config/database');
+const RecordingGateService = require('../services/RecordingGateService');
 
 class Customer {
   // Generate customer ID based on country with global sequence
@@ -62,8 +63,7 @@ class Customer {
       state,
       country,
       credit_limit = 0,
-      customer_id: provided_id,
-      ratecard_id
+      customer_id: provided_id
     } = customerData;
 
     const client = await pool.connect();
@@ -103,9 +103,8 @@ class Customer {
       const customer = customerResult.rows[0];
 
       // Insert wallet with uppercase currency for wallet table
-      const isDemo = customer_id.startsWith('T');
       const initialBalance = 0;
-      const initialFreeSeconds = isDemo ? 2100 : 0;
+      const initialFreeSeconds = 0;
 
       const walletQuery = `
         INSERT INTO customer_wallets (
@@ -125,24 +124,17 @@ class Customer {
       const walletResult = await client.query(walletQuery, walletValues);
       const wallet = walletResult.rows[0];
 
-      // Assign rate card to the new customer (use provided ratecard_id or default to 2)
-      const DEFAULT_RATECARD_ID = ratecard_id || 2;
-      const ratecardQuery = `
-        INSERT INTO customer_ratecard (customer_id, ratecard_id, effective_from)
-        VALUES ($1, $2, NOW())
-        RETURNING *;
-      `;
-      const ratecardResult = await client.query(ratecardQuery, [customer_id, DEFAULT_RATECARD_ID]);
-      const ratecard = ratecardResult.rows[0];
-
       // Commit transaction
       await client.query('COMMIT');
 
-      // Return customer with wallet and rate card data
+      await RecordingGateService.sync(customer_id, wallet);
+
+      // Standard call rate cards are intentionally not assigned in the
+      // recording-only billing model. Keep a null field for API compatibility.
       return {
         ...customer,
         wallet,
-        ratecard
+        ratecard: null
       };
     } catch (err) {
       await client.query('ROLLBACK');
@@ -236,7 +228,8 @@ class Customer {
           WHERE customer_id = $2 
           RETURNING *;
         `;
-        await pool.query(walletQuery, [Number(updates.credit_limit), customerId]);
+        const walletResult = await pool.query(walletQuery, [Number(updates.credit_limit), customerId]);
+        await RecordingGateService.sync(customerId, walletResult.rows[0]);
       } catch (walletErr) {
         console.error(`Failed to update credit limit for ${customerId}:`, walletErr.message);
       }

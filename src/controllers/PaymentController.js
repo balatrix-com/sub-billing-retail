@@ -2,6 +2,7 @@ const PaymentService = require('../services/PaymentService');
 const StripeService = require('../services/StripeService');
 const http = require('http');
 const https = require('https');
+const RecordingGateService = require('../services/RecordingGateService');
 
 function getClientIp(req) {
     return req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown';
@@ -495,6 +496,11 @@ class PaymentController {
             }
 
             await client.query('COMMIT');
+            await RecordingGateService.sync(customer_id, {
+                fiat_balance: newFiatBalance,
+                credit_limit: creditLimit,
+                credit_used: newCreditUsed
+            });
 
             res.status(200).json({
                 success: true,
