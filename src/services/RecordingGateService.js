@@ -1,4 +1,9 @@
-const { createClient } = require('redis');
+let createClient;
+try {
+  ({ createClient } = require('redis'));
+} catch (e) {
+  console.warn('[RecordingGate] redis module not loaded. Run `npm install` to enable recording gate syncing.');
+}
 
 const RECORDING_GATE_KEY = process.env.RECORDING_OVERLIMIT_SET_KEY
   || 'blacklist:customers:recording_overlimit';
@@ -7,6 +12,7 @@ let client;
 let connecting;
 
 function getClient() {
+  if (!createClient) return null;
   if (!client) {
     client = createClient({
       socket: {
@@ -27,6 +33,7 @@ function getClient() {
 
 async function connectedClient() {
   const redisClient = getClient();
+  if (!redisClient) return null;
   if (!redisClient.isOpen) {
     connecting ||= redisClient.connect().finally(() => { connecting = null; });
     await connecting;
@@ -46,6 +53,7 @@ class RecordingGateService {
     if (!customerId || !wallet) return;
     try {
       const redisClient = await connectedClient();
+      if (!redisClient) return;
       const availablePower = this.availablePower(wallet);
       if (availablePower > 0) {
         await redisClient.sRem(RECORDING_GATE_KEY, customerId);
