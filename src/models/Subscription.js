@@ -68,6 +68,7 @@ class Subscription {
       error.statusCode = 400;
       throw error;
     }
+    if (addons.length) throw Object.assign(new Error('Add-ons are replaced by capacity subscriptions'), {statusCode:400});
 
     const subscriptionRowId = uuidv4();
     const readableSubscriptionId = await this.generateReadableSubscriptionId();
@@ -95,8 +96,8 @@ class Subscription {
       }
 
       const plan = planResult.rows[0];
-      const nextBilling = new Date(now);
-      nextBilling.setMonth(nextBilling.getMonth() + Number(plan.validity_months));
+      if (plan.plan_category === 'capacity') throw Object.assign(new Error('Use subscription-management activation for capacity plans'), {statusCode:400});
+      const nextBilling = require('../services/SubscriptionLifecycle').periodEnd(now,plan.duration_unit || 'months',Number(plan.duration_count || plan.validity_months));
 
       let addonRows = [];
       if (normalizedAddons.length > 0) {
@@ -418,6 +419,7 @@ class Subscription {
           ]);
         }
 
+        await client.query("INSERT INTO subscription_outbox(subscription_id,action,payload) VALUES($1,'reconcile',$2)", [subscriptionRowId,{customer_id,subscription_id:subscriptionRowId,reason:'legacy_base_activation'}]);
         await client.query('COMMIT');
 
         await RecordingGateService.sync(customer_id, updatedWalletResult.rows[0]);

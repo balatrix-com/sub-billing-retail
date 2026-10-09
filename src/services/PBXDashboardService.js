@@ -68,12 +68,12 @@ class PBXDashboardService {
   static async getSubscriptionDetails(customerId) {
     const query = `
       SELECT 
-        s.subscription_id, s.status, s.next_billing,
+        s.subscription_id, s.status, s.next_billing, s.entitlement_snapshot,
         p.name as plan_name, p.amount, p.currency,
         p.extensions, p.free_mins, p.validity_months
       FROM subscriptions s
       JOIN plans p ON s.plan_id = p.plan_id
-      WHERE s.customer_id = $1 AND s.status = 'active'
+      WHERE s.customer_id = $1 AND s.status IN ('active','grace') AND s.subscription_type='base'
       ORDER BY s.created_at DESC
       LIMIT 1;
     `;
@@ -83,6 +83,10 @@ class PBXDashboardService {
       const sub = result.rows[0];
       
       if (!sub) return null;
+      const totals = (await readonlyPool.query(`SELECT COALESCE(SUM((entitlement_snapshot->>'numbers')::int),0)::int AS numbers,
+        COALESCE(SUM((entitlement_snapshot->>'extensions')::int),0)::int AS extensions,
+        COALESCE(SUM((entitlement_snapshot->>'monitoring_extensions')::int),0)::int AS monitoring_extensions
+        FROM subscriptions WHERE customer_id=$1 AND status IN ('active','grace')`,[customerId])).rows[0];
 
       return {
         subscription_id: sub.subscription_id,
@@ -92,8 +96,9 @@ class PBXDashboardService {
         currency: sub.currency.toUpperCase(),
         next_billing: sub.next_billing,
         limits: {
-          extensions: sub.extensions,
-          free_mins: sub.free_mins
+          extensions: totals.extensions,
+          numbers: totals.numbers,
+          monitoring_extensions: totals.monitoring_extensions
         }
       };
     } catch (err) {

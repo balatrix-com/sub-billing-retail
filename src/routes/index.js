@@ -16,6 +16,7 @@ router.use('/api/customers', customerRoutes);
 router.use('/api/plans', planRoutes);
 router.use('/api/v1/plans', planRoutes);
 router.use('/api/subscriptions', subscriptionRoutes);
+router.use('/api/subscription-management', require('./subscriptionManagementRoutes'));
 router.use('/api/v2/subscriptions', subscriptionRoutes);
 router.use('/api/v2/subscriptions/addons', addonRoutes);
 router.use('/api/addons', addonRoutes);

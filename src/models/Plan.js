@@ -24,23 +24,28 @@ class Plan {
       monitoring_extensions = 0,
       metadata = {},
       system_plan_id = null,
-      setup_fees = 0
+      setup_fees = 0,
+      plan_category = 'base',
+      duration_unit = 'months',
+      duration_count = validity_months || 1
     } = planData;
 
     const query = `
       INSERT INTO plans (
         plan_id, name, amount, currency, validity_months, rate_card_id,
         numbers, extensions, monitoring_extensions, metadata,
-        system_plan_id, setup_fees
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        system_plan_id, setup_fees, plan_category, duration_unit, duration_count
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
       RETURNING *;
     `;
 
     const values = [
       plan_id, name, amount, currency, validity_months, rate_card_id,
       entitlement(numbers, 'numbers'), entitlement(extensions, 'extensions'), entitlement(monitoring_extensions, 'monitoring_extensions'),
-      JSON.stringify(metadata), system_plan_id, setup_fees
+      JSON.stringify(metadata), system_plan_id, setup_fees, plan_category, duration_unit, duration_count
     ];
+    if (!['base','capacity'].includes(plan_category) || !['days','months'].includes(duration_unit) || !Number.isInteger(Number(duration_count)) || Number(duration_count) < 1 || Number(duration_count)>3660) throw new Error('Invalid plan category or duration');
+    if (plan_category === 'capacity' && rate_card_id) throw new Error('Capacity plans cannot set a rate card');
 
     try {
       const result = await pool.query(query, values);
@@ -72,6 +77,11 @@ class Plan {
   }
 
   static async update(planId, updates) {
+    const current=await this.findById(planId);
+    if(!current)throw Object.assign(new Error('Plan not found'),{statusCode:404});
+    const proposed={...current,...updates};
+    if(!['base','capacity'].includes(proposed.plan_category) || !['days','months'].includes(proposed.duration_unit) || !Number.isInteger(Number(proposed.duration_count)) || Number(proposed.duration_count)<1 || Number(proposed.duration_count)>3660)throw Object.assign(new Error('Invalid plan category or duration'),{statusCode:400});
+    if(proposed.plan_category==='capacity' && proposed.rate_card_id)throw Object.assign(new Error('Capacity plans cannot set a rate card'),{statusCode:400});
     for (const field of ['numbers', 'extensions', 'monitoring_extensions']) {
       if (updates[field] !== undefined) updates[field] = entitlement(updates[field], field);
     }
@@ -92,7 +102,7 @@ class Plan {
     const allowedFields = [
       'name', 'amount', 'validity_months', 'rate_card_id',
       'numbers', 'extensions', 'monitoring_extensions',
-      'metadata', 'system_plan_id', 'setup_fees'
+      'metadata', 'system_plan_id', 'setup_fees', 'plan_category', 'duration_unit', 'duration_count'
     ];
     const updateKeys = Object.keys(updates).filter(key => allowedFields.includes(key));
 

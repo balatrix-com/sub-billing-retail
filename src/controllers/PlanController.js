@@ -16,7 +16,8 @@ class PlanController {
         monitoring_extensions,
         metadata,
         system_plan_id,
-        setup_fees
+        setup_fees,
+        plan_category, duration_unit, duration_count
       } = req.body;
 
       const plan = await PlanModel.create({
@@ -31,7 +32,8 @@ class PlanController {
         monitoring_extensions,
         metadata,
         system_plan_id,
-        setup_fees
+        setup_fees,
+        plan_category, duration_unit, duration_count
       });
 
       res.status(201).json({

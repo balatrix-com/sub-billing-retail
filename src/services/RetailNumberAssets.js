@@ -29,25 +29,26 @@ function createRetailNumberAssets(pool) {
   async function findSubscription(client, identifier, activeOnly) {
     if (!identifier) throw httpError('Subscription identifier is required', 400);
     const result = await client.query(`
-      SELECT s.id, s.subscription_id, s.customer_id, s.plan_id, p.numbers
+      SELECT s.id, s.subscription_id, s.customer_id, s.plan_id,
+             (s.entitlement_snapshot->>'numbers')::int AS numbers
       FROM subscriptions s JOIN plans p ON p.plan_id = s.plan_id
       WHERE (s.subscription_id = $1 OR s.customer_id = $1 OR s.id::text = $1)
-        ${activeOnly ? "AND s.status = 'active'" : ''}
-      ORDER BY s.created_at DESC LIMIT 1 FOR UPDATE OF s
+        ${activeOnly ? "AND s.status IN ('active','grace')" : ''}
+      ORDER BY (s.subscription_type='base') DESC,s.created_at DESC LIMIT 1 FOR UPDATE OF s
     `, [identifier]);
     if (!result.rows.length) throw httpError('Subscription not found', 404);
     return result.rows[0];
   }
 
-  async function countAssigned(client, customerId) {
+  async function countAssigned(client, subscriptionId) {
     const result = await client.query(`
       SELECT (
         (SELECT COUNT(*) FROM tfn_assets a JOIN subscriptions s ON s.id = a.subscription_id
-         WHERE a.customer_id = $1 AND a.tfn_number IS NOT NULL AND a.status = 'active' AND s.status = 'active') +
+         WHERE a.subscription_id = $1 AND a.tfn_number IS NOT NULL AND a.status IN ('active','frozen')) +
         (SELECT COUNT(*) FROM did_assets a JOIN subscriptions s ON s.id = a.subscription_id
-         WHERE a.customer_id = $1 AND a.did_number IS NOT NULL AND a.status = 'active' AND s.status = 'active')
+         WHERE a.subscription_id = $1 AND a.did_number IS NOT NULL AND a.status IN ('active','frozen'))
       )::int AS used
-    `, [customerId]);
+    `, [subscriptionId]);
     return Number(result.rows[0].used);
   }
 
@@ -61,7 +62,7 @@ function createRetailNumberAssets(pool) {
       // A customer may briefly have more than one active subscription during a
       // plan switch, so serialize their pooled number quota across both rows.
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`customer-numbers:${subscription.customer_id}`]);
-      let used = await countAssigned(client, subscription.customer_id);
+      let used = await countAssigned(client, subscription.id);
       const limit = Number(subscription.numbers);
 
       for (const type of ['TFN', 'DID']) {

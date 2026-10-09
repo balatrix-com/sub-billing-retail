@@ -162,7 +162,7 @@ class PBXDashboardController {
       const subRes = await pool.query(
         `SELECT id, subscription_id FROM subscriptions 
          WHERE customer_id = $1 
-         ORDER BY CASE WHEN status = 'active' THEN 1 ELSE 2 END, created_at DESC 
+         ORDER BY CASE WHEN subscription_type='base' THEN 0 ELSE 1 END, CASE WHEN status IN ('active','grace') THEN 1 ELSE 2 END, created_at DESC
          LIMIT 1`,
         [customerId]
       );
@@ -172,9 +172,9 @@ class PBXDashboardController {
       const { id: subscriptionUUID, subscription_id } = subRes.rows[0];
 
       const [tfnRes, didRes, extRes] = await Promise.all([
-        pool.query('SELECT id, source_id, source_type, tfn_number, tfn_name, status, assigned_date, created_at FROM tfn_assets WHERE subscription_id = $1 ORDER BY created_at ASC', [subscriptionUUID]),
-        pool.query('SELECT id, source_id, source_type, did_number, did_name, status, assigned_date, created_at FROM did_assets WHERE subscription_id = $1 ORDER BY created_at ASC', [subscriptionUUID]),
-        pool.query('SELECT id, source_id, source_type, extension_number, extension_name, extension_type, status, assigned_date, created_at FROM extension_assets WHERE subscription_id = $1 ORDER BY created_at ASC', [subscriptionUUID])
+        pool.query("SELECT id, subscription_id, source_id, source_type, tfn_number, tfn_name, status, assigned_date, created_at FROM tfn_assets WHERE customer_id = $1 AND status<>'released' ORDER BY created_at ASC", [customerId]),
+        pool.query("SELECT id, subscription_id, source_id, source_type, did_number, did_name, status, assigned_date, created_at FROM did_assets WHERE customer_id = $1 AND status<>'released' ORDER BY created_at ASC", [customerId]),
+        pool.query("SELECT id, subscription_id, source_id, source_type, extension_number, extension_name, extension_type, status, assigned_date, created_at FROM extension_assets WHERE customer_id = $1 AND status<>'released' ORDER BY created_at ASC", [customerId])
       ]);
 
       res.json({

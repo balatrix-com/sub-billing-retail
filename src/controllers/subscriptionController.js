@@ -181,7 +181,7 @@ class SubscriptionController {
     try {
       const { subscriptionId } = req.params;
 
-      const renewalResult = await BillingService.processSubscriptionRenewal(subscriptionId);
+      const renewalResult = await BillingService.processSubscriptionRenewal(subscriptionId, req.body.operation_key);
 
       res.status(200).json({
         success: true,
