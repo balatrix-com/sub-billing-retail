@@ -121,7 +121,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 CREATE TABLE IF NOT EXISTS subscription_addons_catalog (
     addon_id VARCHAR(64) PRIMARY KEY,
     name VARCHAR(128) NOT NULL,
-    resource_type VARCHAR(32) NOT NULL CHECK (resource_type IN ('extension', 'tfn', 'did', 'supervisor', 'storage')),
+    resource_type VARCHAR(32) NOT NULL CHECK (resource_type IN ('extension', 'tfn', 'did', 'supervisor', 'storage', 'monitoring_extension')),
     units_count INTEGER NOT NULL DEFAULT 1,
     unit_price NUMERIC(14, 6) NOT NULL CHECK (unit_price >= 0),
     currency VARCHAR(3) NOT NULL DEFAULT 'USD',

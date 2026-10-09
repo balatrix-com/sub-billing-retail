@@ -171,8 +171,10 @@ class AssetService {
 
               createdAssets.push({ type: 'EXTENSION', value: extensionNumber, source: 'addon', addon_id });
             }
-          } else if (['TFN', 'DID', 'MONITORING', 'MON'].includes(assetType) || assetType.includes('TOLL')) {
-            throw new Error(`${assetType} add-ons are not supported; numbers and monitoring seats are controlled by the plan`);
+          } else if (['MONITORING_EXTENSION', 'MONITORING', 'MON'].includes(assetType)) {
+            // A monitoring add-on grants a seat; the PBX Admin assigns it to a real user.
+          } else if (['TFN', 'DID'].includes(assetType) || assetType.includes('TOLL')) {
+            throw new Error(`${assetType} number add-ons are not supported; numbers are controlled by the plan`);
           }
         }
       }
@@ -255,8 +257,10 @@ class AssetService {
           ]);
           createdAssets.push({ type: 'EXTENSION', value: extensionNumber, source: 'addon', addon_id });
         }
-      } else if (['TFN', 'DID', 'MONITORING', 'MON'].includes(assetType) || assetType.includes('TOLL')) {
-        throw new Error(`${assetType} add-ons are not supported; numbers and monitoring seats are controlled by the plan`);
+      } else if (['MONITORING_EXTENSION', 'MONITORING', 'MON'].includes(assetType)) {
+        // Purchased seat is counted by the PBX; no placeholder asset is needed.
+      } else if (['TFN', 'DID'].includes(assetType) || assetType.includes('TOLL')) {
+        throw new Error(`${assetType} number add-ons are not supported; numbers are controlled by the plan`);
       }
 
       await client.query('COMMIT');

@@ -15,7 +15,7 @@ class AddonController {
         return res.status(400).json({ success: false, message: 'addon_id, name, and unit_price are required' });
       }
       if (isPlanLimitedAddon({ addon_id, resource_type })) {
-        return res.status(400).json({ success: false, message: 'Numbers and monitoring seats are plan entitlements, not add-ons' });
+        return res.status(400).json({ success: false, message: 'Numbers are plan entitlements, not add-ons' });
       }
 
       const item = await AddonModel.createCatalogItem({
@@ -66,7 +66,7 @@ class AddonController {
         return res.status(404).json({ success: false, message: 'Add-on item not found in catalog' });
       }
       if (isPlanLimitedAddon(addon)) {
-        return res.status(400).json({ success: false, message: 'Numbers and monitoring seats are controlled by the plan' });
+        return res.status(400).json({ success: false, message: 'Numbers are controlled by the plan' });
       }
 
       // 3. Get Customer Wallet Purchasing Power
@@ -90,6 +90,7 @@ class AddonController {
         addon_id: addon.addon_id,
         name: addon.name,
         resource_type: addon.resource_type,
+        units_count: Number(addon.units_count || 1),
         quantity: quote.quantity,
         unit_price: quote.unit_price,
         remaining_days: quote.remaining_days,
@@ -137,7 +138,7 @@ class AddonController {
       }
       if (isPlanLimitedAddon(addon)) {
         await client.query('ROLLBACK');
-        return res.status(400).json({ success: false, message: 'Numbers and monitoring seats are controlled by the plan' });
+        return res.status(400).json({ success: false, message: 'Numbers are controlled by the plan' });
       }
 
       // 3. Get Wallet
@@ -291,6 +292,29 @@ class AddonController {
         success: false,
         message: error.message
       });
+    }
+  }
+
+  // The PBX uses this authoritative, customer-scoped count for monitoring quotas.
+  static async getMonitoringEntitlement(req, res) {
+    try {
+      const result = await pool.query(`
+        SELECT s.id AS subscription_id,
+               COALESCE(SUM(sa.quantity * sac.units_count), 0)::int AS addon_units
+        FROM subscriptions s
+        LEFT JOIN subscription_addons sa ON sa.subscription_id = s.id AND sa.status = 'active'
+        LEFT JOIN subscription_addons_catalog sac ON sac.addon_id = sa.addon_id
+          AND sac.resource_type = 'monitoring_extension'
+        WHERE s.customer_id = $1 AND s.status = 'active'
+        GROUP BY s.id, s.created_at
+        ORDER BY s.created_at DESC LIMIT 1
+      `, [req.params.customerId]);
+      res.status(200).json({ success: true, data: {
+        subscription_id: result.rows[0]?.subscription_id || null,
+        addon_units: Number(result.rows[0]?.addon_units || 0),
+      } });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
     }
   }
 

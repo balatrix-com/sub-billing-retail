@@ -113,7 +113,7 @@ class Subscription {
           throw error;
         }
         if (addonRows.some(isPlanLimitedAddon)) {
-          const error = new Error('Numbers and monitoring seats are controlled by the plan, not add-ons');
+          const error = new Error('Numbers are controlled by the plan, not add-ons');
           error.statusCode = 400;
           throw error;
         }

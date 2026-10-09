@@ -9,6 +9,7 @@ router.post('/catalog', AddonController.createAddonCatalogItem);
 
 // Get all active catalog add-on items
 router.get('/catalog', AddonController.getAddonCatalog);
+router.get('/customer/:customerId/monitoring-entitlement', AddonController.getMonitoringEntitlement);
 
 // Delete (soft-deactivate) a catalog add-on item
 router.delete('/catalog/:addonId', AddonController.deleteAddonCatalogItem);
