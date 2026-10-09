@@ -1,5 +1,15 @@
 const pool = require('../config/database');
 
+function entitlement(value, field) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    const error = new Error(`${field} must be a non-negative integer`);
+    error.statusCode = 400;
+    throw error;
+  }
+  return parsed;
+}
+
 class Plan {
   static async create(planData) {
     const {
@@ -28,7 +38,7 @@ class Plan {
 
     const values = [
       plan_id, name, amount, currency, validity_months, rate_card_id,
-      numbers, extensions, monitoring_extensions,
+      entitlement(numbers, 'numbers'), entitlement(extensions, 'extensions'), entitlement(monitoring_extensions, 'monitoring_extensions'),
       JSON.stringify(metadata), system_plan_id, setup_fees
     ];
 
@@ -36,6 +46,7 @@ class Plan {
       const result = await pool.query(query, values);
       return result.rows[0];
     } catch (err) {
+      if (err.statusCode) throw err;
       throw new Error(`Failed to create plan: ${err.message}`);
     }
   }
@@ -61,6 +72,23 @@ class Plan {
   }
 
   static async update(planId, updates) {
+    for (const field of ['numbers', 'extensions', 'monitoring_extensions']) {
+      if (updates[field] !== undefined) updates[field] = entitlement(updates[field], field);
+    }
+    if (updates.numbers !== undefined) {
+      const overLimit = await pool.query(`
+        SELECT s.customer_id FROM subscriptions s
+        WHERE s.plan_id = $1 AND s.status = 'active' AND
+          ((SELECT COUNT(*) FROM tfn_assets a WHERE a.customer_id = s.customer_id AND a.status = 'active' AND a.tfn_number IS NOT NULL) +
+           (SELECT COUNT(*) FROM did_assets a WHERE a.customer_id = s.customer_id AND a.status = 'active' AND a.did_number IS NOT NULL)) > $2
+        LIMIT 1
+      `, [planId, updates.numbers]);
+      if (overLimit.rows.length) {
+        const error = new Error(`Plan number limit is below assigned numbers for customer ${overLimit.rows[0].customer_id}`);
+        error.statusCode = 409;
+        throw error;
+      }
+    }
     const allowedFields = [
       'name', 'amount', 'validity_months', 'rate_card_id',
       'numbers', 'extensions', 'monitoring_extensions',

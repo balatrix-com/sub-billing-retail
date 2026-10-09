@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon --watch src src/server.js",
-    "migrate": "node migrations/run.js"
+    "migrate": "node migrations/run.js",
+    "test": "node --test test/*.test.js"
   },
   "keywords": [
     "billing",

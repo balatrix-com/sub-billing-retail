@@ -1,6 +1,8 @@
 const pool = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
 const EventService = require('./EventService');
+const { createRetailNumberAssets } = require('./RetailNumberAssets');
+const retailNumberAssets = createRetailNumberAssets(pool);
 
 class AssetService {
   static async generateDID(index) {
@@ -83,7 +85,7 @@ class AssetService {
       // Fetch subscription with plan details
       const subQuery = `
         SELECT s.id, s.subscription_id, s.customer_id, s.plan_id, 
-               p.tfns, p.dids, p.extensions, p.monitoring_per_user
+               p.extensions, p.numbers, p.monitoring_extensions
         FROM subscriptions s
         JOIN plans p ON s.plan_id = p.plan_id
         WHERE s.subscription_id = $1;
@@ -99,39 +101,18 @@ class AssetService {
       const subscriptionUUID = subscription.id; // Use actual UUID from DB
 
       let assetIndex = {
-        dids: await this.getNextDidIndex(client),
-        extensions: await this.getNextExtensionIndex(client, customer_id),
-        tfns: await this.getNextTfnIndex(client),
-        monitoring: await this.getNextMonitoringIndex(client)
+        extensions: await this.getNextExtensionIndex(client, customer_id)
       };
 
       const createdAssets = [];
 
       // 1. CREATE ASSETS FROM PLAN
-      const planAssets = {
-        dids: Number(subscription.dids || 0),
-        extensions: Number(subscription.extensions || 0),
-        tfns: Number(subscription.tfns || 0),
-        monitoring: Number(subscription.monitoring_per_user || 0)
-      };
-
-      // Create DIDs from plan (blank placeholder until manually assigned by Super Admin)
-      for (let i = 0; i < planAssets.dids; i++) {
-        await client.query(`
-          INSERT INTO did_assets (
-            id, customer_id, subscription_id, source_type, source_id,
-            subscription_addon_id, did_number, did_name, status, assigned_date, metadata
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-        `, [
-          uuidv4(), customer_id, subscriptionUUID, 'plan', plan_id,
-          null, null, `DID from ${plan_id}`, 'unassigned', new Date(), JSON.stringify({ plan_id })
-        ]);
-
-        createdAssets.push({ type: 'DID', value: null, status: 'unassigned', source: 'plan' });
-      }
+      // Number and monitoring limits are entitlements, not placeholder assets.
+      // PBX Admins assign real numbers and monitoring seats within these limits.
+      const planExtensions = Number(subscription.extensions || 0);
 
       // Create Extensions from plan
-      for (let i = 0; i < planAssets.extensions; i++) {
+      for (let i = 0; i < planExtensions; i++) {
         const extensionNumber = await this.generateExtension(customer_id, assetIndex.extensions++);
 
         await client.query(`
@@ -145,38 +126,6 @@ class AssetService {
         ]);
 
         createdAssets.push({ type: 'EXTENSION', value: extensionNumber, source: 'plan' });
-      }
-
-      // Create TFNs from plan (blank placeholder until manually assigned by Super Admin)
-      for (let i = 0; i < planAssets.tfns; i++) {
-        await client.query(`
-          INSERT INTO tfn_assets (
-            id, customer_id, subscription_id, source_type, source_id,
-            subscription_addon_id, tfn_number, tfn_name, status, assigned_date, metadata
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-        `, [
-          uuidv4(), customer_id, subscriptionUUID, 'plan', plan_id,
-          null, null, `TFN from ${plan_id}`, 'unassigned', new Date(), JSON.stringify({ plan_id })
-        ]);
-
-        createdAssets.push({ type: 'TFN', value: null, status: 'unassigned', source: 'plan' });
-      }
-
-      // Create Monitoring from plan
-      for (let i = 0; i < planAssets.monitoring; i++) {
-        const userId = await this.generateMonitoring(assetIndex.monitoring++);
-
-        await client.query(`
-          INSERT INTO monitoring_assets (
-            id, customer_id, subscription_id, source_type, source_id,
-            subscription_addon_id, user_id, user_name, user_email, status, assigned_date, metadata
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-        `, [
-          uuidv4(), customer_id, subscriptionUUID, 'plan', plan_id,
-          null, userId, userId, `${userId}@company.local`, 'active', new Date(), JSON.stringify({ plan_id })
-        ]);
-
-        createdAssets.push({ type: 'MONITORING', value: userId, source: 'plan' });
       }
 
       // 2. CREATE ASSETS FROM ADDONS
@@ -222,50 +171,8 @@ class AssetService {
 
               createdAssets.push({ type: 'EXTENSION', value: extensionNumber, source: 'addon', addon_id });
             }
-          } else if (assetType === 'TFN' || assetType.includes('TOLL')) {
-            for (let i = 0; i < assetCount; i++) {
-              await client.query(`
-                INSERT INTO tfn_assets (
-                  id, customer_id, subscription_id, source_type, source_id,
-                  subscription_addon_id, tfn_number, tfn_name, status, assigned_date, metadata
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-              `, [
-                uuidv4(), customer_id, subscriptionUUID, 'addon', addon_id,
-                subscriptionAddonId, null, `TFN from ${addon_id}`, 'unassigned', new Date(), JSON.stringify({ addon_id, quantity })
-              ]);
-
-              createdAssets.push({ type: 'TFN', value: null, status: 'unassigned', source: 'addon', addon_id });
-            }
-          } else if (assetType === 'DID') {
-            for (let i = 0; i < assetCount; i++) {
-              await client.query(`
-                INSERT INTO did_assets (
-                  id, customer_id, subscription_id, source_type, source_id,
-                  subscription_addon_id, did_number, did_name, status, assigned_date, metadata
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-              `, [
-                uuidv4(), customer_id, subscriptionUUID, 'addon', addon_id,
-                subscriptionAddonId, null, `DID from ${addon_id}`, 'unassigned', new Date(), JSON.stringify({ addon_id, quantity })
-              ]);
-
-              createdAssets.push({ type: 'DID', value: null, status: 'unassigned', source: 'addon', addon_id });
-            }
-          } else if (assetType === 'MONITORING' || assetType === 'MON') {
-            for (let i = 0; i < assetCount; i++) {
-              const userId = await this.generateMonitoring(assetIndex.monitoring++);
-
-              await client.query(`
-                INSERT INTO monitoring_assets (
-                  id, customer_id, subscription_id, source_type, source_id,
-                  subscription_addon_id, user_id, user_name, user_email, status, assigned_date, metadata
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-              `, [
-                uuidv4(), customer_id, subscriptionUUID, 'addon', addon_id,
-                subscriptionAddonId, userId, userId, `${userId}@company.local`, 'active', new Date(), JSON.stringify({ addon_id, quantity })
-              ]);
-
-              createdAssets.push({ type: 'MONITORING', value: userId, source: 'addon', addon_id });
-            }
+          } else if (['TFN', 'DID', 'MONITORING', 'MON'].includes(assetType) || assetType.includes('TOLL')) {
+            throw new Error(`${assetType} add-ons are not supported; numbers and monitoring seats are controlled by the plan`);
           }
         }
       }
@@ -331,10 +238,7 @@ class AssetService {
       const createdAssets = [];
 
       let assetIndex = {
-        dids: await this.getNextDidIndex(client),
-        extensions: await this.getNextExtensionIndex(client, customer_id),
-        tfns: await this.getNextTfnIndex(client),
-        monitoring: await this.getNextMonitoringIndex(client)
+        extensions: await this.getNextExtensionIndex(client, customer_id)
       };
 
       if (assetType === 'EXT' || assetType === 'EXTENSION') {
@@ -351,46 +255,8 @@ class AssetService {
           ]);
           createdAssets.push({ type: 'EXTENSION', value: extensionNumber, source: 'addon', addon_id });
         }
-      } else if (assetType === 'TFN' || assetType.includes('TOLL')) {
-        for (let i = 0; i < assetCount; i++) {
-          await client.query(`
-            INSERT INTO tfn_assets (
-              id, customer_id, subscription_id, source_type, source_id,
-              subscription_addon_id, tfn_number, tfn_name, status, assigned_date, metadata
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-          `, [
-            uuidv4(), customer_id, subscriptionUUID, 'addon', addon_id,
-            id, null, `TFN from ${addon_id}`, 'unassigned', new Date(), JSON.stringify({ addon_id, quantity })
-          ]);
-          createdAssets.push({ type: 'TFN', value: null, status: 'unassigned', source: 'addon', addon_id });
-        }
-      } else if (assetType === 'DID') {
-        for (let i = 0; i < assetCount; i++) {
-          await client.query(`
-            INSERT INTO did_assets (
-              id, customer_id, subscription_id, source_type, source_id,
-              subscription_addon_id, did_number, did_name, status, assigned_date, metadata
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-          `, [
-            uuidv4(), customer_id, subscriptionUUID, 'addon', addon_id,
-            id, null, `DID from ${addon_id}`, 'unassigned', new Date(), JSON.stringify({ addon_id, quantity })
-          ]);
-          createdAssets.push({ type: 'DID', value: null, status: 'unassigned', source: 'addon', addon_id });
-        }
-      } else if (assetType === 'MONITORING' || assetType === 'MON') {
-        for (let i = 0; i < assetCount; i++) {
-          const userId = await this.generateMonitoring(assetIndex.monitoring++);
-          await client.query(`
-            INSERT INTO monitoring_assets (
-              id, customer_id, subscription_id, source_type, source_id,
-              subscription_addon_id, user_id, user_name, user_email, status, assigned_date, metadata
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-          `, [
-            uuidv4(), customer_id, subscriptionUUID, 'addon', addon_id,
-            id, userId, userId, `${userId}@company.local`, 'active', new Date(), JSON.stringify({ addon_id, quantity })
-          ]);
-          createdAssets.push({ type: 'MONITORING', value: userId, source: 'addon', addon_id });
-        }
+      } else if (['TFN', 'DID', 'MONITORING', 'MON'].includes(assetType) || assetType.includes('TOLL')) {
+        throw new Error(`${assetType} add-ons are not supported; numbers and monitoring seats are controlled by the plan`);
       }
 
       await client.query('COMMIT');
@@ -478,175 +344,12 @@ class AssetService {
   }
 
   static async syncAssets(subscriptionId, assets) {
-    const rawTfns = Array.isArray(assets.tfns) ? assets.tfns : [];
-    const rawDids = Array.isArray(assets.dids) ? assets.dids : [];
-    
-    // Deduplicate input to prevent processing the same number twice in one call
-    const tfns = [...new Set(rawTfns.map(n => String(n).trim()).filter(Boolean))];
-    const dids = [...new Set(rawDids.map(n => String(n).trim()).filter(Boolean))];
-
-    const client = await pool.connect();
-
-    try {
-      await client.query('BEGIN');
-
-      // Fetch the subscription row UUID by subscription_id, customer_id (e.g. U1007), or row UUID
-      const subRes = await client.query(`
-        SELECT id, subscription_id, customer_id 
-        FROM subscriptions 
-        WHERE subscription_id = $1 OR customer_id = $1 OR id::text = $1
-        ORDER BY created_at DESC 
-        LIMIT 1;
-      `, [subscriptionId]);
-
-      if (subRes.rows.length === 0) {
-        throw new Error(`Subscription not found for identifier: ${subscriptionId}`);
-      }
-      const subscriptionUUID = subRes.rows[0].id;
-      const customerId = subRes.rows[0].customer_id;
-      const readableSubId = subRes.rows[0].subscription_id;
-
-      // Sync TFNs
-      for (const tfn of tfns) {
-        // 1. Check if this TFN already exists in the system
-        const existingRes = await client.query(`SELECT subscription_id, id FROM tfn_assets WHERE tfn_number = $1`, [tfn]);
-        
-        if (existingRes.rows.length > 0) {
-          const ownerSubUUID = existingRes.rows[0].subscription_id;
-          if (ownerSubUUID === subscriptionUUID) {
-            console.log(`[AssetService] TFN ${tfn} already assigned to subscription ${readableSubId}, ensuring active.`);
-            await client.query(`UPDATE tfn_assets SET status = 'active', updated_at = now() WHERE id = $1`, [existingRes.rows[0].id]);
-            continue;
-          } else {
-            console.warn(`[AssetService] TFN ${tfn} is already assigned to a DIFFERENT subscription (${ownerSubUUID}). Reassigning to ${readableSubId}.`);
-            await client.query(`UPDATE tfn_assets SET subscription_id = $1, customer_id = $2, status = 'active', updated_at = now() WHERE id = $3`, [subscriptionUUID, customerId, existingRes.rows[0].id]);
-            continue;
-          }
-        }
-
-        // 2. Find an unassigned placeholder TFN for this subscription
-        const placeholderRes = await client.query(`
-          SELECT id FROM tfn_assets 
-          WHERE subscription_id = $1 AND (tfn_number IS NULL OR tfn_number LIKE 'TFN_%' OR status = 'unassigned')
-          ORDER BY (tfn_number IS NULL) DESC, created_at ASC 
-          LIMIT 1
-        `, [subscriptionUUID]);
-
-        if (placeholderRes.rows.length > 0) {
-          await client.query(`
-            UPDATE tfn_assets 
-            SET tfn_number = $1, status = 'active', updated_at = now() 
-            WHERE id = $2
-          `, [tfn, placeholderRes.rows[0].id]);
-          console.log(`[AssetService] Synced TFN ${tfn} for subscription ${readableSubId}`);
-        } else {
-          // If no placeholder, insert as new active TFN asset
-          await client.query(`
-            INSERT INTO tfn_assets (
-              id, customer_id, subscription_id, source_type, source_id,
-              subscription_addon_id, tfn_number, tfn_name, status, assigned_date, metadata
-            ) VALUES ($1, $2, $3, 'plan', 'manual_assignment', null, $4, $5, 'active', now(), '{}'::jsonb)
-          `, [uuidv4(), customerId, subscriptionUUID, tfn, `TFN ${tfn}`]);
-          console.log(`[AssetService] Created new TFN asset ${tfn} for subscription ${readableSubId}`);
-        }
-      }
-
-      // Sync DIDs
-      for (const did of dids) {
-        // 1. Check if this DID already exists
-        const existingRes = await client.query(`SELECT subscription_id, id FROM did_assets WHERE did_number = $1`, [did]);
-        
-        if (existingRes.rows.length > 0) {
-          const ownerSubUUID = existingRes.rows[0].subscription_id;
-          if (ownerSubUUID === subscriptionUUID) {
-            console.log(`[AssetService] DID ${did} already assigned to subscription ${readableSubId}, ensuring active.`);
-            await client.query(`UPDATE did_assets SET status = 'active', updated_at = now() WHERE id = $1`, [existingRes.rows[0].id]);
-            continue;
-          } else {
-            console.warn(`[AssetService] DID ${did} is already assigned to a DIFFERENT subscription (${ownerSubUUID}). Reassigning to ${readableSubId}.`);
-            await client.query(`UPDATE did_assets SET subscription_id = $1, customer_id = $2, status = 'active', updated_at = now() WHERE id = $3`, [subscriptionUUID, customerId, existingRes.rows[0].id]);
-            continue;
-          }
-        }
-
-        // 2. Find an unassigned placeholder DID for this subscription
-        const placeholderRes = await client.query(`
-          SELECT id FROM did_assets 
-          WHERE subscription_id = $1 AND (did_number IS NULL OR did_number ~ '^\\+1-800-555-[0-9]{4}$' OR did_number LIKE 'DID_%' OR status = 'unassigned')
-          ORDER BY (did_number IS NULL) DESC, created_at ASC 
-          LIMIT 1
-        `, [subscriptionUUID]);
-
-        if (placeholderRes.rows.length > 0) {
-          await client.query(`
-            UPDATE did_assets 
-            SET did_number = $1, status = 'active', updated_at = now() 
-            WHERE id = $2
-          `, [did, placeholderRes.rows[0].id]);
-          console.log(`[AssetService] Synced DID ${did} for subscription ${readableSubId}`);
-        } else {
-          // If no placeholder, insert as new active DID asset
-          await client.query(`
-            INSERT INTO did_assets (
-              id, customer_id, subscription_id, source_type, source_id,
-              subscription_addon_id, did_number, did_name, status, assigned_date, metadata
-            ) VALUES ($1, $2, $3, 'plan', 'manual_assignment', null, $4, $5, 'active', now(), '{}'::jsonb)
-          `, [uuidv4(), customerId, subscriptionUUID, did, `DID ${did}`]);
-          console.log(`[AssetService] Created new DID asset ${did} for subscription ${readableSubId}`);
-        }
-      }
-
-      await client.query('COMMIT');
-      return { success: true };
-    } catch (err) {
-      await client.query('ROLLBACK');
-      console.error(`[AssetService] Error syncing assets:`, err);
-      throw err;
-    } finally {
-      client.release();
-    }
+    return retailNumberAssets.syncAssets(subscriptionId, assets);
   }
 
-  static async unassignAssets(assets) {
-    const rawTfns = Array.isArray(assets.tfns) ? assets.tfns : [];
-    const rawDids = Array.isArray(assets.dids) ? assets.dids : [];
-
-    const tfns = [...new Set(rawTfns.map(n => String(n).trim()).filter(Boolean))];
-    const dids = [...new Set(rawDids.map(n => String(n).trim()).filter(Boolean))];
-
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-
-      if (tfns.length > 0) {
-        await client.query(`
-          UPDATE tfn_assets 
-          SET tfn_number = NULL, status = 'unassigned', updated_at = now() 
-          WHERE tfn_number = ANY($1::text[]);
-        `, [tfns]);
-        console.log(`[AssetService] Unassigned TFNs: ${tfns.join(', ')}`);
-      }
-
-      if (dids.length > 0) {
-        await client.query(`
-          UPDATE did_assets 
-          SET did_number = NULL, status = 'unassigned', updated_at = now() 
-          WHERE did_number = ANY($1::text[]);
-        `, [dids]);
-        console.log(`[AssetService] Unassigned DIDs: ${dids.join(', ')}`);
-      }
-
-      await client.query('COMMIT');
-      return { success: true };
-    } catch (err) {
-      await client.query('ROLLBACK');
-      console.error(`[AssetService] Error unassigning assets:`, err);
-      throw err;
-    } finally {
-      client.release();
-    }
+  static async unassignAssets(subscriptionId, assets) {
+    return retailNumberAssets.unassignAssets(subscriptionId, assets);
   }
-
   static async initialize() {
     // Listen for subscription creation events
     EventService.on('subscription.created', async (data) => {

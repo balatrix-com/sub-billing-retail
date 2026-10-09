@@ -4,6 +4,7 @@ const pool = require('../config/database');
 const ProrationService = require('../services/ProrationService');
 const AssetService = require('../services/AssetService');
 const RecordingGateService = require('../services/RecordingGateService');
+const { isPlanLimitedAddon } = require('../services/PlanLimitedAddons');
 
 class AddonController {
   // Create or Update Catalog Addon Item
@@ -12,6 +13,9 @@ class AddonController {
       const { addon_id, name, resource_type, units_count = 1, unit_price, currency, is_active } = req.body;
       if (!addon_id || !name || unit_price === undefined) {
         return res.status(400).json({ success: false, message: 'addon_id, name, and unit_price are required' });
+      }
+      if (isPlanLimitedAddon({ addon_id, resource_type })) {
+        return res.status(400).json({ success: false, message: 'Numbers and monitoring seats are plan entitlements, not add-ons' });
       }
 
       const item = await AddonModel.createCatalogItem({
@@ -34,7 +38,7 @@ class AddonController {
   static async getAddonCatalog(req, res) {
     try {
       const catalog = await AddonModel.getAllCatalogItems();
-      res.status(200).json({ success: true, data: catalog });
+      res.status(200).json({ success: true, data: catalog.filter(item => !isPlanLimitedAddon(item)) });
     } catch (error) {
       res.status(500).json({ success: false, message: error.message });
     }
@@ -60,6 +64,9 @@ class AddonController {
       const addon = await AddonModel.getCatalogItemById(addon_id);
       if (!addon) {
         return res.status(404).json({ success: false, message: 'Add-on item not found in catalog' });
+      }
+      if (isPlanLimitedAddon(addon)) {
+        return res.status(400).json({ success: false, message: 'Numbers and monitoring seats are controlled by the plan' });
       }
 
       // 3. Get Customer Wallet Purchasing Power
@@ -127,6 +134,10 @@ class AddonController {
       if (!addon) {
         await client.query('ROLLBACK');
         return res.status(404).json({ success: false, message: 'Add-on item not found' });
+      }
+      if (isPlanLimitedAddon(addon)) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: 'Numbers and monitoring seats are controlled by the plan' });
       }
 
       // 3. Get Wallet

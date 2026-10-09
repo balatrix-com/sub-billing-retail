@@ -26,7 +26,7 @@ router.get('/cdrs/:customerId', PBXDashboardController.getCustomerCDRs);
 
 // POST /api/pbx/sync-assets/:subscriptionId
 router.post('/sync-assets/:subscriptionId', PBXDashboardController.syncAssets);
-router.post('/unassign-assets', PBXDashboardController.unassignAssets);
+router.post('/unassign-assets/:subscriptionId', PBXDashboardController.unassignAssets);
 router.get('/subscription-assets/:subscriptionId', PBXDashboardController.getSubscriptionAssets);
 
 // GET /api/pbx/assets/:customerId - Get all assets (TFNs, DIDs, Extensions) for a customer

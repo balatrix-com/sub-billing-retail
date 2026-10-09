@@ -162,7 +162,7 @@ function validatePlanForm() {
     const planName = (document.getElementById('planName').value || '').trim();
     const amount = Number(document.getElementById('planAmount').value);
     const validityMonths = Number(document.getElementById('validityMonths').value);
-    const nonNegativeFieldIds = ['tfns', 'dids', 'freeMins', 'extensions', 'monitoring'];
+    const nonNegativeFieldIds = ['numbers', 'extensions', 'monitoringExtensions'];
 
     if (!planId) {
         errors.push('Plan ID is required.');
@@ -186,7 +186,7 @@ function validatePlanForm() {
 
     nonNegativeFieldIds.forEach((fieldId) => {
         const value = Number(document.getElementById(fieldId).value);
-        if (Number.isNaN(value) || value < 0) {
+        if (!Number.isInteger(value) || value < 0) {
             invalidFieldIds.push(fieldId);
         }
     });
@@ -455,7 +455,7 @@ async function deleteCustomer(customerId) {
 
 // Load plans for dropdown and table
 async function loadPlans() {
-    setTableLoading('plansBody', 7);
+    setTableLoading('plansBody', 9);
 
     try {
         const response = await fetch('/api/plans');
@@ -481,7 +481,7 @@ async function loadPlans() {
         tbody.innerHTML = '';
 
         if (dashboardState.plans.length === 0) {
-            setEmptyState(tbody, 7, 'No plans found. Create a plan to sell subscriptions.');
+            setEmptyState(tbody, 9, 'No plans found. Create a plan to sell subscriptions.');
             clearTableLoading('plansBody');
             updateKpis();
             return;
@@ -494,7 +494,9 @@ async function loadPlans() {
                 <td>${plan.name}</td>
                 <td>${plan.amount} ${plan.currency}</td>
                 <td>${plan.validity_months} months</td>
-                <td>${plan.free_mins || 0}</td>
+                <td>${plan.numbers || 0}</td>
+                <td>${plan.extensions || 0}</td>
+                <td>${plan.monitoring_extensions || 0}</td>
                 <td>${new Date(plan.created_at).toLocaleDateString()}</td>
                 <td>
                     <button class="action-btn delete-btn" onclick="deletePlan('${plan.plan_id}')">Delete</button>
@@ -516,7 +518,7 @@ async function loadPlans() {
 async function createPlan(event) {
     event.preventDefault();
 
-    clearFieldErrors(['planId', 'planName', 'planAmount', 'validityMonths', 'tfns', 'dids', 'freeMins', 'extensions', 'monitoring']);
+    clearFieldErrors(['planId', 'planName', 'planAmount', 'validityMonths', 'numbers', 'extensions', 'monitoringExtensions']);
     showFormErrors('planFormErrors', []);
 
     const planValidation = validatePlanForm();
@@ -537,11 +539,9 @@ async function createPlan(event) {
         amount: parseFloat(document.getElementById('planAmount').value),
         currency: document.getElementById('planCurrency').value,
         validity_months: parseInt(document.getElementById('validityMonths').value),
-        tfns: parseInt(document.getElementById('tfns').value) || 0,
-        dids: parseInt(document.getElementById('dids').value) || 0,
-        free_mins: parseInt(document.getElementById('freeMins').value) || 0,
+        numbers: parseInt(document.getElementById('numbers').value) || 0,
         extensions: parseInt(document.getElementById('extensions').value) || 0,
-        monitoring_per_user: parseInt(document.getElementById('monitoring').value) || 0
+        monitoring_extensions: parseInt(document.getElementById('monitoringExtensions').value) || 0
     };
 
     try {

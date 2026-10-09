@@ -108,18 +108,19 @@ class PBXDashboardController {
       res.status(200).json(result);
     } catch (err) {
       console.error(`[PBXDashboardController] Error syncing assets:`, err);
-      res.status(500).json({ error: 'Internal Server Error', details: err.message });
+      res.status(err.statusCode || 500).json({ error: err.message });
     }
   }
 
   static async unassignAssets(req, res) {
     try {
+      const { subscriptionId } = req.params;
       const { tfns, dids } = req.body;
-      const result = await AssetService.unassignAssets({ tfns, dids });
+      const result = await AssetService.unassignAssets(subscriptionId, { tfns, dids });
       res.status(200).json(result);
     } catch (err) {
       console.error(`[PBXDashboardController] Error unassigning assets:`, err);
-      res.status(500).json({ error: 'Internal Server Error', details: err.message });
+      res.status(err.statusCode || 500).json({ error: err.message });
     }
   }
 
@@ -132,8 +133,8 @@ class PBXDashboardController {
         if (subRes.rows.length === 0) return res.status(404).json({ error: 'Subscription not found' });
         const subUUID = subRes.rows[0].id;
 
-        const tfns = await client.query('SELECT tfn_number FROM tfn_assets WHERE subscription_id = $1', [subUUID]);
-        const dids = await client.query('SELECT did_number FROM did_assets WHERE subscription_id = $1', [subUUID]);
+        const tfns = await client.query('SELECT tfn_number FROM tfn_assets WHERE subscription_id = $1 AND tfn_number IS NOT NULL', [subUUID]);
+        const dids = await client.query('SELECT did_number FROM did_assets WHERE subscription_id = $1 AND did_number IS NOT NULL', [subUUID]);
 
         res.json({
           subscriptionId,
@@ -142,8 +143,8 @@ class PBXDashboardController {
           totalTfns: tfns.rows.length,
           totalDids: dids.rows.length,
           placeholders: {
-            tfns: tfns.rows.filter(r => r.tfn_number.startsWith('TFN_')).length,
-            dids: dids.rows.filter(r => r.did_number.startsWith('+1-800-555-')).length
+            tfns: 0,
+            dids: 0
           }
         });
       } finally {

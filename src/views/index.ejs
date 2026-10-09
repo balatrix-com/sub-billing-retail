@@ -143,13 +143,17 @@
                             <input type="number" placeholder="Validity (months)" id="validityMonths" required>
                             <div class="full-span form-intro">
                                 <p class="group-title">Entitlements</p>
-                                <p class="group-copy">Define included assets and bundled free minutes for the plan.</p>
+                                <p class="group-copy">DIDs and toll-free numbers share one number allowance. PBX Admins assign monitoring seats to users.</p>
                             </div>
-                            <input type="number" placeholder="TFNs" id="tfns" value="0">
-                            <input type="number" placeholder="DIDs" id="dids" value="0">
-                            <input type="number" placeholder="Free Minutes" id="freeMins" value="0">
-                            <input type="number" placeholder="Extensions" id="extensions" value="0">
-                            <input type="number" placeholder="Monitoring per User" id="monitoring" value="0">
+                            <label for="numbers">Included numbers (DID + TFN)
+                                <input type="number" id="numbers" min="0" step="1" value="0" required>
+                            </label>
+                            <label for="extensions">SIP extensions
+                                <input type="number" id="extensions" min="0" step="1" value="0" required>
+                            </label>
+                            <label for="monitoringExtensions">Monitoring extensions
+                                <input type="number" id="monitoringExtensions" min="0" step="1" value="0" required>
+                            </label>
                             <div id="planFormErrors" class="form-errors full-span" aria-live="polite"></div>
                             <button type="submit">Create Plan</button>
                         </form>
@@ -168,7 +172,9 @@
                                         <th>Name</th>
                                         <th>Amount</th>
                                         <th>Validity</th>
-                                        <th>Free Minutes</th>
+                                        <th>Numbers</th>
+                                        <th>Extensions</th>
+                                        <th>Monitoring</th>
                                         <th>Created</th>
                                         <th>Actions</th>
                                     </tr>

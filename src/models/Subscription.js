@@ -3,6 +3,7 @@ const { v4: uuidv4 } = require('uuid');
 const EventService = require('../services/EventService');
 const WalletLockService = require('../services/WalletLockService');
 const RecordingGateService = require('../services/RecordingGateService');
+const { isPlanLimitedAddon } = require('../services/PlanLimitedAddons');
 
 class Subscription {
   static generateTxnRef(prefix) {
@@ -108,6 +109,11 @@ class Subscription {
         const missing = addonIds.filter((id) => !foundAddonIds.has(id));
         if (missing.length > 0) {
           const error = new Error(`Addon not found or inactive: ${missing.join(', ')}`);
+          error.statusCode = 400;
+          throw error;
+        }
+        if (addonRows.some(isPlanLimitedAddon)) {
+          const error = new Error('Numbers and monitoring seats are controlled by the plan, not add-ons');
           error.statusCode = 400;
           throw error;
         }
