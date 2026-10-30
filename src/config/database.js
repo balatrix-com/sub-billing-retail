@@ -9,19 +9,19 @@ const pool = new Pool({
   database: process.env.DB_NAME,
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
-  max: parseInt(process.env.DB_POOL_MAX || '20', 10),
-  idleTimeoutMillis: 30000,
+  max: parseInt(process.env.DB_POOL_MAX || '6', 10),
+  idleTimeoutMillis: 10000,
   connectionTimeoutMillis: parseInt(process.env.DB_CONNECT_TIMEOUT || '20000', 10),
 });
 
-const readonlyPool = new Pool({
+const readonlyPool = !process.env.READONLY_DB_HOST || process.env.READONLY_DB_HOST === process.env.DB_HOST ? pool : new Pool({
   host: process.env.READONLY_DB_HOST,
   port: process.env.READONLY_DB_PORT,
   database: process.env.DB_NAME,
   user: process.env.READONLY_DB_USER,
   password: process.env.READONLY_DB_PASSWORD,
-  max: parseInt(process.env.DB_POOL_MAX || '20', 10),
-  idleTimeoutMillis: 30000,
+  max: parseInt(process.env.DB_POOL_MAX || '6', 10),
+  idleTimeoutMillis: 10000,
   connectionTimeoutMillis: parseInt(process.env.DB_CONNECT_TIMEOUT || '20000', 10),
 });
 
@@ -29,7 +29,7 @@ pool.on('error', (err) => {
   console.error('Unexpected error on primary idle client', err);
 });
 
-readonlyPool.on('error', (err) => {
+if (readonlyPool !== pool) readonlyPool.on('error', (err) => {
   console.error('Unexpected error on readonly idle client', err);
 });
 

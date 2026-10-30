@@ -1,41 +1,18 @@
 const pool = require('../config/database');
 const RecordingGateService = require('../services/RecordingGateService');
+const CustomerIdentityService = require('../services/CustomerIdentityService');
+const { createCustomerLifecycle } = require('../services/CustomerLifecycleService');
 
 class Customer {
   // Generate customer ID based on country with global sequence
   static async generateCustomerId(country) {
-    try {
-      const prefix = country === 'CAD' ? 'C' : 'U';
-      
-      // Get the highest numeric part from ALL customer_ids (global sequence)
-      const query = `
-        SELECT customer_id FROM customers 
-        WHERE customer_id ~ '^[CU][0-9]+$'
-        ORDER BY CAST(SUBSTRING(customer_id FROM 2) AS INTEGER) DESC 
-        LIMIT 1;
-      `;
-      
-      const result = await pool.query(query);
-      
-      let nextNumber = 1;
-      if (result.rows.length > 0) {
-        const lastId = result.rows[0].customer_id;
-        const currentNumber = parseInt(lastId.substring(1));
-        nextNumber = currentNumber + 1;
-      }
-      
-      // Format with leading zeros (4 digits)
-      const customerId = `${prefix}${String(nextNumber).padStart(4, '0')}`;
-      return customerId;
-    } catch (err) {
-      throw new Error(`Failed to generate customer ID: ${err.message}`);
-    }
+    return CustomerIdentityService.reserve(country === 'CAD' ? 'C' : 'U');
   }
 
   // Check if email already exists
   static async emailExists(email) {
     try {
-      const query = 'SELECT customer_id FROM customers WHERE admin_email = $1;';
+      const query = "SELECT customer_id FROM customers WHERE lower(admin_email) = lower($1) AND lifecycle_status='ACTIVE';";
       const result = await pool.query(query, [email]);
       return result.rows.length > 0;
     } catch (err) {
@@ -72,7 +49,7 @@ class Customer {
       // Start transaction
       await client.query('BEGIN');
 
-      // Check for duplicate email
+      // Archived billing identities retain their contact history; live emails may be reused.
       const emailExists = await this.emailExists(admin_email);
       if (emailExists) {
         await client.query('ROLLBACK');
@@ -81,6 +58,8 @@ class Customer {
 
       // Use provided ID or generate one
       const customer_id = provided_id || await this.generateCustomerId(country);
+      if (/^[UC][0-9]{4}$/.test(customer_id)) await CustomerIdentityService.claim(customer_id);
+      else if (!/^T[A-Za-z0-9_-]+$/.test(customer_id)) throw new Error('Customer ID must be allocated by the PBX identity service');
 
       // Assign currency based on country
       const currency = this.assignCurrency(country);
@@ -155,7 +134,7 @@ class Customer {
   }
 
   static async findByEmail(email) {
-    const query = 'SELECT * FROM customers WHERE admin_email = $1;';
+    const query = "SELECT * FROM customers WHERE admin_email = $1 AND lifecycle_status='ACTIVE';";
     try {
       const result = await pool.query(query, [email]);
       return result.rows[0] || null;
@@ -244,13 +223,8 @@ class Customer {
   }
 
   static async delete(customerId) {
-    const query = 'DELETE FROM customers WHERE customer_id = $1 RETURNING *;';
-    try {
-      const result = await pool.query(query, [customerId]);
-      return result.rows[0] || null;
-    } catch (err) {
-      throw new Error(`Failed to delete customer: ${err.message}`);
-    }
+    // Legacy DELETE now archives: financial rows and customer identity survive.
+    return createCustomerLifecycle(pool).archive(customerId, 'legacy-customer-delete');
   }
 
   static async getWallet(customerId) {

@@ -154,27 +154,7 @@ class CustomerController {
 
   // Delete customer
   static async deleteCustomer(req, res) {
-    try {
-      const { customerId } = req.params;
-      const result = await CustomerModel.delete(customerId);
-
-      if (!result) {
-        return res.status(404).json({
-          success: false,
-          message: 'Customer not found'
-        });
-      }
-
-      res.status(200).json({
-        success: true,
-        message: 'Customer deleted successfully'
-      });
-    } catch (error) {
-      res.status(500).json({
-        success: false,
-        message: error.message
-      });
-    }
+    return res.status(410).json({ success: false, message: 'Customer removal must be requested from the PBX archive workflow to coordinate telecom teardown and preserve history' });
   }
 
   // Get all customers

@@ -2,7 +2,20 @@ const pool = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
 const EventService = require('./EventService');
 const { createRetailNumberAssets } = require('./RetailNumberAssets');
+const { signedHeaders } = require('../middleware/serviceAuth');
 const retailNumberAssets = createRetailNumberAssets(pool);
+
+function notifyPbxExtensionSync(customerId) {
+  const rawUrl = process.env.PBX_API_URL || 'http://localhost:3000/api';
+  const pbxUrl = rawUrl.endsWith('/api') ? rawUrl : `${rawUrl}/api`;
+  const url = `${pbxUrl}/telecom/extensions/sync-from-billing`;
+  const body = JSON.stringify({ customerId });
+  return fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...signedHeaders('POST', url, body) },
+    body,
+  });
+}
 
 class AssetService {
   static async generateDID(index) {
@@ -183,13 +196,7 @@ class AssetService {
 
       // Notify PBX backend to provision & sync extensions to PBX DB & Kamailio
       try {
-        const rawUrl = process.env.PBX_API_URL || 'http://localhost:3000/api';
-        const pbxUrl = rawUrl.endsWith('/api') ? rawUrl : `${rawUrl}/api`;
-        fetch(`${pbxUrl}/telecom/extensions/sync-from-billing`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ customerId: customer_id })
-        }).catch(err => {
+        notifyPbxExtensionSync(customer_id).catch(err => {
           console.warn(`[AssetService] PBX extension sync notification warning: ${err.message}`);
         });
       } catch (e) {}
@@ -267,13 +274,7 @@ class AssetService {
 
       // Notify PBX backend to provision & sync extensions to PBX DB & Kamailio
       try {
-        const rawUrl = process.env.PBX_API_URL || 'http://localhost:3000/api';
-        const pbxUrl = rawUrl.endsWith('/api') ? rawUrl : `${rawUrl}/api`;
-        fetch(`${pbxUrl}/telecom/extensions/sync-from-billing`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ customerId: customer_id })
-        }).catch(err => {
+        notifyPbxExtensionSync(customer_id).catch(err => {
           console.warn(`[AssetService] PBX addon extension sync notification warning: ${err.message}`);
         });
       } catch (e) {}

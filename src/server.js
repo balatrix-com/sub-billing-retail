@@ -1,7 +1,6 @@
 require('dotenv').config();
 
 const express = require('express');
-const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const pool = require('./config/database');
@@ -9,23 +8,18 @@ const routes = require('./routes');
 const AssetService = require('./services/AssetService');
 const BillingService = require('./services/BillingService');
 const paymentRoutes = require('./routes/paymentRoutes');
+const { requireService } = require('./middleware/serviceAuth');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// View engine setup
-app.set('view engine', 'ejs');
-app.set('views', './src/views');
-
-// Static files
-app.use(express.static('./src/public'));
+app.set('trust proxy', 'loopback');
 
 // Middleware
 app.use(helmet({
   contentSecurityPolicy: false, // Disable CSP for development
 }));
 app.use(morgan('combined'));
-app.use(cors());
 
 // Parse JSON for all other routes
 app.use(express.json({
@@ -34,6 +28,10 @@ app.use(express.json({
   }
 }));
 app.use(express.urlencoded({ extended: true }));
+app.use('/api', (req, res, next) => {
+  if (req.originalUrl === '/api/payments/webhook/stripe') return next();
+  return requireService(req, res, next);
+});
 
 // Dedicated trace for Stripe webhook requests
 app.use('/api/payments/webhook/stripe', (req, res, next) => {
@@ -68,11 +66,6 @@ app.get('/api/db-check', async (req, res) => {
       error: err.message
     });
   }
-});
-
-// Admin dashboard
-app.get('/', (req, res) => {
-  res.render('index');
 });
 
 // Payment routes

@@ -35,9 +35,10 @@ function createSubscriptionLifecycle(pool) {
     catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
   }
   async function subscription(c, identifier, lock = false) {
-    const r = await c.query(`SELECT s.*,p.name AS plan_name FROM subscriptions s JOIN plans p ON p.plan_id=s.plan_id
+    const r = await c.query(`SELECT s.*,p.name AS plan_name,c.lifecycle_status AS customer_lifecycle_status FROM subscriptions s JOIN plans p ON p.plan_id=s.plan_id JOIN customers c ON c.customer_id=s.customer_id
       WHERE s.id::text=$1 OR s.subscription_id=$1 ${lock ? 'FOR UPDATE OF s' : ''}`, [identifier]);
     if (!r.rows[0]) throw fail('Subscription not found', 404);
+    if (lock && r.rows[0].customer_lifecycle_status === 'ARCHIVED') throw fail('Archived customer cannot change subscriptions',409);
     return r.rows[0];
   }
   async function event(c, s, action, actor, metadata = {}) {
@@ -103,6 +104,8 @@ function createSubscriptionLifecycle(pool) {
       }
       const pr = await c.query('SELECT * FROM plans WHERE plan_id=$1', [input.plan_id]);
       const p = pr.rows[0]; if (!p) throw fail('Plan not found', 404);
+      const customer = (await c.query('SELECT lifecycle_status FROM customers WHERE customer_id=$1', [input.customer_id])).rows[0];
+      if (!customer || customer.lifecycle_status === 'ARCHIVED') throw fail('Customer is missing or archived',409);
       const type = p.plan_category || 'base';
       await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`subscriptions:${input.customer_id}`]);
       const base = await c.query("SELECT * FROM subscriptions WHERE customer_id=$1 AND subscription_type='base' AND status IN ('active','grace') ORDER BY created_at DESC LIMIT 1", [input.customer_id]);
@@ -297,9 +300,13 @@ function createSubscriptionLifecycle(pool) {
         try {
           const root = (process.env.PBX_API_URL || 'http://localhost:3000/api').replace(/\/$/, '');
           const url = root.endsWith('/api') ? root : `${root}/api`;
-          const response = await fetch(`${url}/internal/subscriptions/events`, { method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-subscription-token': process.env.SUBSCRIPTION_SERVICE_TOKEN },
-            body: JSON.stringify({ ...e.payload, event_id: e.id, action: e.action, occurred_at: e.created_at }), signal: AbortSignal.timeout(8000) });
+          const endpoint = `${url}/internal/subscriptions/events`;
+          const body = JSON.stringify({ ...e.payload, event_id: e.id, action: e.action, occurred_at: e.created_at });
+          const { signedHeaders } = require('../middleware/serviceAuth');
+          const response = await fetch(endpoint, { method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-subscription-token': process.env.SUBSCRIPTION_SERVICE_TOKEN,
+              ...signedHeaders('POST', endpoint, body) },
+            body, signal: AbortSignal.timeout(8000) });
           if (!response.ok) throw new Error(`PBX responded ${response.status}`);
           await c.query('UPDATE subscription_outbox SET delivered_at=now(),attempts=attempts+1,last_error=NULL WHERE id=$1', [e.id]);
         } catch (err) {
@@ -310,9 +317,9 @@ function createSubscriptionLifecycle(pool) {
     });
   }
   async function tick(dryRun = false) {
-    const r = await pool.query(`SELECT * FROM subscriptions WHERE
-      (status IN ('active','grace') AND end_date<=now()) OR
-      (status IN ('frozen','cancelled') AND frozen_at IS NOT NULL) ORDER BY subscription_type,end_date`);
+    const r = await pool.query(`SELECT s.* FROM subscriptions s JOIN customers c ON c.customer_id=s.customer_id WHERE c.lifecycle_status='ACTIVE' AND (
+      (s.status IN ('active','grace') AND s.end_date<=now()) OR
+      (s.status IN ('frozen','cancelled') AND s.frozen_at IS NOT NULL)) ORDER BY s.subscription_type,s.end_date`);
     const result = { processed: 0, failed: 0, results: [], failures: [] };
     for (const s of r.rows) {
       if (dryRun) { result.results.push({ id: s.id, status: s.status, auto_renew: s.auto_renew }); continue; }
