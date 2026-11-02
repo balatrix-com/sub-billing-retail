@@ -1,4 +1,5 @@
 const CustomerModel = require('../models/Customer');
+const CacheRefreshService = require('../services/CacheRefreshService');
 
 class CustomerController {
   // Create a new customer
@@ -64,16 +65,7 @@ class CustomerController {
         const cacheUrl = process.env.BILLING_CACHE_REFRESH_URL;
 
         if (cacheUrl) {
-          console.log(`[CustomerController] Triggering cache refresh at ${cacheUrl}`);
-          const http = cacheUrl.startsWith('https') ? require('https') : require('http');
-          const req = http.request(cacheUrl, { method: 'POST' }, (res) => {
-            console.log(`[CustomerController] Cache refresh response: ${res.statusCode}`);
-            res.on('data', () => {}); // Consume data to free memory
-          });
-          req.on('error', (err) => {
-            console.error('[CustomerController] Cache refresh failed:', err.message);
-          });
-          req.end();
+          CacheRefreshService.sendPost(cacheUrl);
         }
       } catch (err) {
         console.error('Error triggering cache refresh:', err.message);

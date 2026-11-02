@@ -7,11 +7,19 @@ class CacheRefreshService {
       console.warn('[CacheRefreshService] No URL provided for cache refresh');
       return;
     }
+    const token = process.env.BILLING_CACHE_REFRESH_TOKEN;
+    if (!token) {
+      console.warn('[CacheRefreshService] Billing cache refresh token is not configured');
+      return;
+    }
 
     try {
       console.log(`[CacheRefreshService] Triggering cache refresh at ${urlStr}`);
       const client = urlStr.startsWith('https') ? https : http;
-      const req = client.request(urlStr, { method: 'POST' }, (res) => {
+      const req = client.request(urlStr, {
+        method: 'POST',
+        headers: { 'X-Auth-Token': token },
+      }, (res) => {
         console.log(`[CacheRefreshService] Cache refresh response from ${urlStr}: status ${res.statusCode}`);
         res.on('data', () => {}); // Consume stream to avoid memory leak
       });
