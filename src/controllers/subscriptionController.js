@@ -233,7 +233,6 @@ class SubscriptionController {
       }
 
       const targetPlan = planRes.rows[0];
-      const targetRateCardId = targetPlan.rate_card_id || 'ratecard_pro';
 
       if (execute_on_expiration) {
         const switchTime = subscription.next_billing || subscription.end_date || new Date();
@@ -256,8 +255,8 @@ class SubscriptionController {
       } else {
         // Immediate switch logic
         await pool.query(
-          `UPDATE subscriptions SET plan_id = $1, rate_card_id = $2, base_plan_price = $3, updated_at = NOW() WHERE id = $4;`,
-          [target_plan_id, targetRateCardId, targetPlan.amount, subscription.id]
+          `UPDATE subscriptions SET plan_id = $1, rate_card_id = NULL, base_plan_price = $2, updated_at = NOW() WHERE id = $3;`,
+          [target_plan_id, targetPlan.amount, subscription.id]
         );
 
         return res.status(200).json({
@@ -266,8 +265,7 @@ class SubscriptionController {
           data: {
             customer_id,
             subscription_id: subscription.subscription_id,
-            new_plan_id: target_plan_id,
-            rate_card_id: targetRateCardId
+            new_plan_id: target_plan_id
           }
         });
       }

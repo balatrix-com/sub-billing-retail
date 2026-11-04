@@ -3,7 +3,6 @@ const customerRoutes = require('./customerRoutes');
 const planRoutes = require('./planRoutes');
 const subscriptionRoutes = require('./subscriptionRoutes');
 const pbxDashboardRoutes = require('./pbxDashboardRoutes');
-const rateCardRoutes = require('./rateCardRoutes');
 const recRateCardRoutes = require('./recRateCardRoutes');
 
 const addonRoutes = require('./addonRoutes');
@@ -23,8 +22,7 @@ router.use('/api/v2/subscriptions/addons', addonRoutes);
 router.use('/api/addons', addonRoutes);
 router.use('/api/v2/wallets', paymentRoutes);
 router.use('/api/pbx', pbxDashboardRoutes);
-router.use('/api/rate-cards', rateCardRoutes);
-router.use('/api/v1/ratecards', rateCardRoutes);
+// Standard rate cards are retired in retail; only recording rate cards are supported:
 router.use('/api/rec-rate-cards', recRateCardRoutes);
 
 module.exports = router;

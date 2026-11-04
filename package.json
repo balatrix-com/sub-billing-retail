@@ -7,6 +7,8 @@
     "start": "node src/server.js",
     "dev": "nodemon --watch src src/server.js",
     "migrate": "node migrations/run.js",
+    "migrate:status": "node migrations/run.js --status",
+    "migrate:check": "node migrations/run.js --check",
     "test": "node --test test/*.test.js"
   },
   "keywords": [

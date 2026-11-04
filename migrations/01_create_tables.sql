@@ -311,56 +311,9 @@ CREATE TABLE IF NOT EXISTS free_mins_transactions (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- 10. Rate Cards (Standard Call Rate Cards)
-CREATE TABLE IF NOT EXISTS rate_cards (
-    ratecard_id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL,
-    currency CHAR(3) NOT NULL DEFAULT 'USD',
-    country TEXT,
-    in_rate_per_min NUMERIC(14,6) NOT NULL DEFAULT 0,
-    in_rate_per_sec NUMERIC(14,8),
-    in_initial_increment_sec INTEGER NOT NULL DEFAULT 60,
-    in_increment_sec INTEGER NOT NULL DEFAULT 60,
-    ob_rate_per_min NUMERIC(14,6) NOT NULL DEFAULT 0,
-    ob_rate_per_sec NUMERIC(14,8),
-    ob_initial_increment_sec INTEGER NOT NULL DEFAULT 60,
-    ob_increment_sec INTEGER NOT NULL DEFAULT 60,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- Idempotent column check for existing rate_cards tables
-ALTER TABLE rate_cards ADD COLUMN IF NOT EXISTS in_rate_per_sec NUMERIC(14,8);
-ALTER TABLE rate_cards ADD COLUMN IF NOT EXISTS ob_rate_per_sec NUMERIC(14,8);
-UPDATE rate_cards SET in_rate_per_sec = ROUND(in_rate_per_min / 60.0, 8) WHERE in_rate_per_sec IS NULL AND in_rate_per_min IS NOT NULL;
-UPDATE rate_cards SET ob_rate_per_sec = ROUND(ob_rate_per_min / 60.0, 8) WHERE ob_rate_per_sec IS NULL AND ob_rate_per_min IS NOT NULL;
-
--- Seed Default Standard Rate Cards so ratecard_id = 2 (default) always exists
-INSERT INTO rate_cards (ratecard_id, name, currency, in_rate_per_min, in_rate_per_sec, ob_rate_per_min, ob_rate_per_sec)
-VALUES 
-    (1, 'Standard_Global', 'USD', 0.0020, 0.00003333, 0.0080, 0.00013333),
-    (2, 'Default Rate Card', 'USD', 0.0100, 0.00016667, 0.0050, 0.00008333),
-    (3, 'Premium Rate Card', 'USD', 0.0150, 0.00025000, 0.0100, 0.00016667)
-ON CONFLICT (ratecard_id) DO UPDATE
-SET in_rate_per_sec = COALESCE(rate_cards.in_rate_per_sec, EXCLUDED.in_rate_per_sec),
-    ob_rate_per_sec = COALESCE(rate_cards.ob_rate_per_sec, EXCLUDED.ob_rate_per_sec);
-
-SELECT setval(pg_get_serial_sequence('rate_cards', 'ratecard_id'), COALESCE((SELECT MAX(ratecard_id) FROM rate_cards), 1));
-
--- 11. Customer Rate Card Mapping
-CREATE TABLE IF NOT EXISTS customer_ratecard (
-    customer_id TEXT PRIMARY KEY REFERENCES customers(customer_id) ON DELETE CASCADE,
-    ratecard_id BIGINT NOT NULL REFERENCES rate_cards(ratecard_id) ON DELETE CASCADE,
-    effective_from TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    effective_to TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- Idempotent column check for existing customer_ratecard tables
-ALTER TABLE customer_ratecard ADD COLUMN IF NOT EXISTS effective_from TIMESTAMPTZ NOT NULL DEFAULT NOW();
-ALTER TABLE customer_ratecard ADD COLUMN IF NOT EXISTS effective_to TIMESTAMPTZ;
-ALTER TABLE customer_ratecard ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+-- 10 & 11. Standard Rate Cards (RETIRED IN RETAIL)
+-- Standard per-minute call rate cards and customer_ratecard mappings have been removed.
+-- Retail utilizes subscription base/capacity plans and Recording Rate Cards (rec_rate_card).
 
 -- 12. Recording Rate Cards
 CREATE TABLE IF NOT EXISTS rec_rate_card (
@@ -413,11 +366,7 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
-DROP TRIGGER IF EXISTS update_rate_cards_updated_at ON rate_cards;
-CREATE TRIGGER update_rate_cards_updated_at
-    BEFORE UPDATE ON rate_cards
-    FOR EACH ROW
-    EXECUTE PROCEDURE update_updated_at_column();
+-- DROP TRIGGER IF EXISTS update_rate_cards_updated_at ON rate_cards; (RETIRED)
 
 -- 15. Call Detail Records (CDR)
 CREATE TABLE IF NOT EXISTS cdr (

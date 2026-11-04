@@ -125,12 +125,8 @@ function createSubscriptionLifecycle(pool) {
         VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15,$13,$13,$16) RETURNING *`,
       [id, `SUB-${Date.now()}-${id.slice(0, 6)}`, input.customer_id, p.plan_id, mode === 'pending' ? 'pending_activation' : 'active', start, end,
         type, type === 'capacity' ? base.rows[0].id : null, unit, count, input.auto_renew === true, price, String(p.currency).toLowerCase(),
-        { numbers: Number(p.numbers || 0), extensions: Number(p.extensions || 0), monitoring_extensions: Number(p.monitoring_extensions || 0), storage_gb: Number(p.metadata?.storage_gb || 0) }, type==='base' ? p.rate_card_id : null]);
+        { numbers: Number(p.numbers || 0), extensions: Number(p.extensions || 0), monitoring_extensions: Number(p.monitoring_extensions || 0), storage_gb: Number(p.metadata?.storage_gb || 0) }, null]);
       const s = r.rows[0];
-      if (type === 'base' && mode !== 'pending' && p.rate_card_id) {
-        await c.query(`INSERT INTO customer_ratecard(customer_id,ratecard_id) VALUES($1,$2::bigint)
-          ON CONFLICT(customer_id) DO UPDATE SET ratecard_id=EXCLUDED.ratecard_id,effective_from=now(),updated_at=now()`,[s.customer_id,p.rate_card_id]);
-      }
       if (mode !== 'pending') {
         await debit(c, s, price + Number(p.setup_fees || 0), key, mode === 'credit_override');
         await provisionExtensions(c, s);
@@ -193,8 +189,6 @@ function createSubscriptionLifecycle(pool) {
         return r.rows[0];
       }
       const start = s.status === 'pending_activation' ? new Date() : new Date(Math.max(Date.now(), new Date(s.end_date).getTime()));
-      if(s.status==='pending_activation' && s.subscription_type==='base' && s.rate_card_id) await c.query(`INSERT INTO customer_ratecard(customer_id,ratecard_id) VALUES($1,$2::bigint)
-        ON CONFLICT(customer_id) DO UPDATE SET ratecard_id=EXCLUDED.ratecard_id,effective_from=now(),updated_at=now()`,[s.customer_id,s.rate_card_id]);
       const end = periodEnd(start, s.duration_unit, Number(s.duration_count));
       const r = await c.query(`UPDATE subscriptions SET status='active',start_date=$2,end_date=$3,next_billing=$3,grace_ends_at=NULL,frozen_at=NULL,
         renewal_attempts=0,last_renewal_attempt_at=now(),updated_at=now() WHERE id=$1 RETURNING *`, [s.id, start, end]);
