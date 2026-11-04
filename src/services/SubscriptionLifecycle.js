@@ -84,6 +84,20 @@ function createSubscriptionLifecycle(pool) {
     }
     return r.rows;
   }
+  async function listAll() {
+    const r = await pool.query(`SELECT s.*,p.name AS plan_name FROM subscriptions s JOIN plans p ON p.plan_id=s.plan_id
+      ORDER BY s.subscription_type,s.created_at DESC`);
+    for (const s of r.rows) {
+      s.assets = await assets(s.id);
+      s.usage = { numbers: 0, extensions: 0, monitoring_extensions: 0, frozen: 0 };
+      for (const a of s.assets) {
+        if (a.status === 'released') continue;
+        s.usage[ASSETS[a.type].resource]++;
+        if (a.status === 'frozen') s.usage.frozen++;
+      }
+    }
+    return r.rows;
+  }
   async function quote(input) {
     const p=(await pool.query('SELECT * FROM plans WHERE plan_id=$1',[input.plan_id])).rows[0];
     if(!p)throw fail('Plan not found',404);
@@ -359,7 +373,7 @@ function createSubscriptionLifecycle(pool) {
       await event(c,s,'reconcile',actor);return {success:true};
     });
   }
-  return { list, quote, subscription: id => subscription(pool, id), assets, activate, renew, transition, autoRenew, assignMonitoring, unassignMonitoring, transferMonitoring, assignExtension,unassignExtension, move, dispatch, tick,
+  return { list, listAll, quote, subscription: id => subscription(pool, id), assets, activate, renew, transition, autoRenew, assignMonitoring, unassignMonitoring, transferMonitoring, assignExtension,unassignExtension, move, dispatch, tick,
     history: async id => (await pool.query('SELECT * FROM subscription_history WHERE subscription_id=$1 ORDER BY created_at DESC', [(await subscription(pool, id)).id])).rows };
 }
 module.exports = { createSubscriptionLifecycle, periodEnd, serviceAuth, ASSETS };

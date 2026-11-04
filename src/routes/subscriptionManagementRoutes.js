@@ -8,6 +8,7 @@ const handle = fn => async (req, res) => {
   catch (e) { res.status(e.statusCode || 500).json({ success: false, message: e.message }); }
 };
 router.get('/customer/:customerId', handle(r => lifecycle.list(r.params.customerId)));
+router.get('/all', handle(r => lifecycle.listAll()));
 router.post('/activate', handle(r => lifecycle.activate(r.body, r.body.actor_id)));
 router.post('/quote', handle(r => lifecycle.quote(r.body)));
 router.get('/:id', handle(r => lifecycle.subscription(r.params.id)));
