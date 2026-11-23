@@ -487,10 +487,11 @@ class PaymentService {
           id, payment_id, transaction_id, customer_id, amount, currency, status,
           payment_method, gateway, description, metadata, completed_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+        ON CONFLICT (transaction_id) DO NOTHING
         RETURNING *;
       `;
 
-      await client.query(insertQuery, [
+      const inserted = await client.query(insertQuery, [
         paymentUUID,
         payment_id,
         tx_id, // External transaction ID from manager
@@ -503,6 +504,21 @@ class PaymentService {
         description || `Manual payment: ${tx_id}`,
         JSON.stringify({ external_tx_id: tx_id, manual: true })
       ]);
+
+      if (inserted.rows.length === 0) {
+        const existing = await client.query(
+          'SELECT payment_id, customer_id, amount, currency, payment_method, gateway, status FROM payments WHERE transaction_id = $1',
+          [tx_id]
+        );
+        const payment = existing.rows[0];
+        if (!payment || payment.customer_id !== customer_id || Number(payment.amount) !== Number(amount) ||
+            payment.currency !== currency.toLowerCase() || payment.payment_method !== payment_type ||
+            payment.gateway !== 'manual' || payment.status !== 'completed') {
+          throw new Error('Transaction ID was already used for a different payment');
+        }
+        await client.query('COMMIT');
+        return { success: true, payment_id: payment.payment_id, customer_id, amount, status: 'completed', replayed: true };
+      }
 
       // Credit wallet (reusing existing robust logic)
       const updatedWallet = await this.creditWallet(client, customer_id, amount, payment_id);
