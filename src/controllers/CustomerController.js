@@ -60,13 +60,9 @@ class CustomerController {
         }
       }
 
-      // Trigger cache refresh in the billing system
+      // Retail retains recording rates only; standard rate_cards was retired.
       try {
-        const cacheUrl = process.env.BILLING_CACHE_REFRESH_URL;
-
-        if (cacheUrl) {
-          CacheRefreshService.sendPost(cacheUrl);
-        }
+        CacheRefreshService.triggerRecordRefresh();
       } catch (err) {
         console.error('Error triggering cache refresh:', err.message);
       }
